@@ -1,6 +1,8 @@
 package watch
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/fsnotify/fsnotify"
 	"log"
@@ -10,33 +12,46 @@ import (
 	"time"
 )
 
-// TODO 아래 코드는 추후 환경설정으로 사용될 수 있음.
+type Config struct {
+	MaxWatchCount int
+	RootDir       string
+}
+
 var (
-	watchCount int
-	// TODO 이걸 전역적으로 둬야 하나??? 아래 TODO 적용후 삭제
+	watchCount int // 감시 디렉토리 갯수
 	isWatching bool
 	eventQueue []fsnotify.Event // 이벤트 큐
 	queueMu    sync.Mutex       // 큐에 접근하는 뮤텍스
-
-	Watcher       *fsnotify.Watcher
-	MaxWatchCount int
-
-	RootDir string
-	once    sync.Once // 한 번만 실행되도록 제어
-
+	once       sync.Once        // 한 번만 실행되도록 제어
 	// TODO paths 의 중복확인을 해줘야 함. 물론 중복된 경우는 넘어간다고 하지만, 추가 삭제에 대한 중복확인은 해줘야 함.
-	watchedPaths = make(map[string]bool)
+	watchedPaths  = make(map[string]bool)
+	maxWatchCount int
+	rootDir       string
+	watcher       *fsnotify.Watcher
 )
 
-func init() {
-	eventQueue = make([]fsnotify.Event, 0) // eventQueue 초기화
-	// TODO 일단 초기화
-	MaxWatchCount = 10
-	// TODO 일단 이렇게 함.
-	RootDir = "/home/dev-comd/go/src/github.com/seoyhaein/datablock-test01/testfolder"
+func Init(path string) {
+
+	config, err := loadConfig(path)
+	if err != nil {
+		log.Println("loadConfig error:", err)
+		return
+	}
+	maxWatchCount = config.MaxWatchCount
+	rootDir = config.RootDir
+	watcher, err = StartWatching(nil)
+	if err != nil {
+		log.Println("StartWatching error:", err)
+		return
+	}
+	log.Println("Initialization completed successfully.")
 }
 
-func AddWatch(watcher *fsnotify.Watcher, path string, maxWatchCount int, mu *sync.Mutex) error {
+func AddWatch(watcher *fsnotify.Watcher, path string, mu *sync.Mutex) error {
+	if watcher == nil {
+		return fmt.Errorf("watcher is nil")
+	}
+
 	if mu != nil {
 		mu.Lock()
 		defer mu.Unlock()
@@ -56,6 +71,10 @@ func AddWatch(watcher *fsnotify.Watcher, path string, maxWatchCount int, mu *syn
 }
 
 func RemoveWatch(watcher *fsnotify.Watcher, path string, mu *sync.Mutex) error {
+	if watcher == nil {
+		return fmt.Errorf("watcher is nil")
+	}
+
 	if mu != nil {
 		mu.Lock()
 		defer mu.Unlock()
@@ -72,19 +91,10 @@ func RemoveWatch(watcher *fsnotify.Watcher, path string, mu *sync.Mutex) error {
 }
 
 // StartWatching TODO 테스트 필요 watchCount, isWatching 를 담고 있는 구조체로 만들자.
-func StartWatching(paths []string, maxWatchCount int, mu *sync.Mutex) (*fsnotify.Watcher, error) {
-	if mu != nil {
-		mu.Lock()
-		defer mu.Unlock()
-	}
-
+func StartWatching(paths []string) (*fsnotify.Watcher, error) {
 	if isWatching {
 		log.Println("Already watching.")
-		if Watcher != nil {
-			return Watcher, nil
-		}
-		log.Println("Watcher is nil")
-		return nil, fmt.Errorf("watcher is nil")
+		return nil, errors.New("already watching")
 	}
 	// 새로운 watcher 생성
 	watcher, err := fsnotify.NewWatcher()
@@ -92,34 +102,31 @@ func StartWatching(paths []string, maxWatchCount int, mu *sync.Mutex) (*fsnotify
 		return nil, err
 	}
 	isWatching = true
+
 	return watcher, nil
 }
 
 // StopWatching - 감시를 중지하는 함수
-func StopWatching(watcher *fsnotify.Watcher, mu *sync.Mutex) error {
-	if mu != nil {
-		mu.Lock()
-		defer mu.Unlock()
-	}
+func StopWatching() error {
 
 	if watcher == nil || !isWatching {
 		log.Println("No active watcher to stop.")
 		return fmt.Errorf("No active watcher to stop	")
 	}
-
 	err := watcher.Close()
 	if err != nil {
 		log.Println("Failed to close watcher:", err)
 		return err
 	}
-
 	isWatching = false
 	log.Println("Stopped watching.")
 	return nil
 }
 
 // WatchEvents 이벤트 처리 루프 TODO 기억용으로 넣어둠 수정 해야힘. - 고루틴 사용 예정, 에러 채널 만들어야 함.
-func WatchEvents(watcher *fsnotify.Watcher) {
+func WatchEvents() {
+	// TODO 에러 채널 만들어 주자.
+	// watcher 가 nil 일때.
 	for {
 		select {
 		case event, ok := <-watcher.Events:
@@ -166,20 +173,20 @@ func ProcessEvents(errChan chan<- error) {
 		case event.Has(fsnotify.Create):
 			log.Println("File created:", event.Name)
 			if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
-				if err := AddWatch(Watcher, event.Name, MaxWatchCount, &mu); err != nil {
+				if err := AddWatch(watcher, event.Name, &mu); err != nil {
 					log.Printf("Failed to add watch for directory %s: %v", event.Name, err)
 				}
 			}
 
 		case event.Has(fsnotify.Remove):
 			log.Println("File removed:", event.Name)
-			if err := RemoveWatch(Watcher, event.Name, &mu); err != nil {
+			if err := RemoveWatch(watcher, event.Name, &mu); err != nil {
 				log.Printf("Failed to remove watch for %s: %v", event.Name, err)
 			}
 
 		case event.Has(fsnotify.Rename):
 			log.Println("File renamed:", event.Name)
-			if err := RemoveWatch(Watcher, event.Name, &mu); err != nil {
+			if err := RemoveWatch(watcher, event.Name, &mu); err != nil {
 				log.Printf("Failed to remove watch for renamed file %s: %v", event.Name, err)
 			}
 
@@ -224,7 +231,7 @@ func FirstWalk(watcher *fsnotify.Watcher) error {
 			return err
 		}
 		if info.IsDir() {
-			return AddWatch(watcher, path, MaxWatchCount, &mu)
+			return AddWatch(watcher, path, &mu)
 		}
 		return nil
 	})
@@ -250,11 +257,59 @@ func FirstWalk1(watcher *fsnotify.Watcher) error {
 				return err
 			}
 			if info.IsDir() {
-				return AddWatch(watcher, path, MaxWatchCount, &mu)
+				return AddWatch(watcher, path, &mu)
 			}
 			return nil
 		})
 	})
 
 	return err // once.Do 이후 최종 반환
+}
+
+func loadConfig(filename string) (*Config, error) {
+	// Open the file
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
+
+	// Decode JSON data into a generic map
+	decoder := json.NewDecoder(file)
+	configData := make(map[string]interface{})
+	if err := decoder.Decode(&configData); err != nil {
+		return nil, fmt.Errorf("failed to decode configuration: %w", err)
+	}
+
+	// Create a Config instance
+	config := &Config{}
+
+	// Process MaxWatchCount
+	if value, ok := configData["MaxWatchCount"]; ok {
+		if floatValue, valid := value.(float64); valid {
+			config.MaxWatchCount = int(floatValue)
+		} else {
+			log.Printf("Invalid type for MaxWatchCount in configuration")
+			return nil, fmt.Errorf("invalid type for MaxWatchCount")
+		}
+	} else {
+		log.Printf("Missing MaxWatchCount in configuration")
+		return nil, fmt.Errorf("missing MaxWatchCount in configuration")
+	}
+
+	// Process rootDir
+	if value, ok := configData["rootDir"]; ok {
+		if stringValue, valid := value.(string); valid {
+			config.RootDir = stringValue
+		} else {
+			log.Printf("Invalid type for rootDir in configuration")
+			return nil, fmt.Errorf("invalid type for rootDir")
+		}
+	} else {
+		log.Printf("Missing rootDir in configuration")
+		return nil, fmt.Errorf("missing rootDir in configuration")
+	}
+
+	// Return the populated config
+	return config, nil
 }
