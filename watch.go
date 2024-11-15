@@ -1,4 +1,4 @@
-package datablock
+package watch
 
 import (
 	"fmt"
@@ -21,7 +21,7 @@ var (
 	Watcher       *fsnotify.Watcher
 	MaxWatchCount int
 
-	rootDir string
+	RootDir string
 	once    sync.Once // 한 번만 실행되도록 제어
 
 	// TODO paths 의 중복확인을 해줘야 함. 물론 중복된 경우는 넘어간다고 하지만, 추가 삭제에 대한 중복확인은 해줘야 함.
@@ -33,7 +33,7 @@ func init() {
 	// TODO 일단 초기화
 	MaxWatchCount = 10
 	// TODO 일단 이렇게 함.
-	rootDir = "/home/dev-comd/go/src/github.com/seoyhaein/datablock-test01/testfolder"
+	RootDir = "/home/dev-comd/go/src/github.com/seoyhaein/datablock-test01/testfolder"
 }
 
 func AddWatch(watcher *fsnotify.Watcher, path string, maxWatchCount int, mu *sync.Mutex) error {
