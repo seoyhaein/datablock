@@ -275,6 +275,7 @@ func FirstWalk(watcher *fsnotify.Watcher) error {
 
 // FirstWalk1 TODO once 부분 리턴에 관해서 살펴봐야 함. 익명함수 내에서 리턴도 같이 봐야 함.
 // 관련파일을 작성해주는 메서드를 만들어 줘야 함.
+// TODO context 넣어 주어야 함.
 func FirstWalk1(watcher *fsnotify.Watcher) error {
 	var mu sync.Mutex
 	var err error
