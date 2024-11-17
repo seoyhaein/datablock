@@ -1,6 +1,7 @@
 package watch
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -108,7 +109,6 @@ func StartWatching(paths []string) (*fsnotify.Watcher, error) {
 
 // StopWatching - 감시를 중지하는 함수
 func StopWatching() error {
-
 	if watcher == nil || !isWatching {
 		log.Println("No active watcher to stop.")
 		return fmt.Errorf("No active watcher to stop	")
@@ -123,12 +123,40 @@ func StopWatching() error {
 	return nil
 }
 
-// WatchEvents 이벤트 처리 루프 TODO 기억용으로 넣어둠 수정 해야힘. - 고루틴 사용 예정, 에러 채널 만들어야 함.
-func WatchEvents() {
-	// TODO 에러 채널 만들어 주자.
-	// watcher 가 nil 일때.
+// ListenEvents 이벤트 처리 루프
+func ListenEvents(ctx context.Context, errChan chan<- error) {
 	for {
 		select {
+		case <-ctx.Done():
+			log.Println("Stopping ListenEvents...")
+			return
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			log.Println("Event:", event)
+			addToQueue(event) // 이벤트를 큐에 추가
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			log.Println("Error:", err)
+			select {
+			case errChan <- err:
+			case <-ctx.Done():
+				return // 컨텍스트가 취소된 경우 반환
+			}
+		}
+	}
+}
+
+/*
+func ListenEvents(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("Stopping ListenEvents...")
+			return
 		case event, ok := <-watcher.Events:
 			if !ok {
 				return
@@ -143,7 +171,7 @@ func WatchEvents() {
 		}
 	}
 }
-
+*/
 // addToQueue 이벤트를 큐에 추가하는 함수
 func addToQueue(event fsnotify.Event) {
 	queueMu.Lock()
@@ -152,54 +180,60 @@ func addToQueue(event fsnotify.Event) {
 }
 
 // ProcessEvents 큐에서 이벤트를 하나씩 처리하는 함수 - 고루틴 사용
-func ProcessEvents(errChan chan<- error) {
+func ProcessEvents(ctx context.Context, errChan chan<- error) {
 	var mu sync.Mutex
-	var err error
 
 	for {
-		queueMu.Lock()
-		if len(eventQueue) == 0 {
+		select {
+		case <-ctx.Done():
+			log.Println("Stopping ProcessEvents...")
+			return
+		default:
+			queueMu.Lock()
+			if len(eventQueue) == 0 {
+				queueMu.Unlock()
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+			event := eventQueue[0]
+			eventQueue = eventQueue[1:]
 			queueMu.Unlock()
-			time.Sleep(100 * time.Millisecond)
-			continue
-		}
-		event := eventQueue[0]
-		eventQueue = eventQueue[1:]
-		queueMu.Unlock()
 
-		// 이벤트 처리
-		log.Println("처리 중인 이벤트:", event)
-		switch {
-		case event.Has(fsnotify.Create):
-			log.Println("File created:", event.Name)
-			if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
-				if err := AddWatch(watcher, event.Name, &mu); err != nil {
-					log.Printf("Failed to add watch for directory %s: %v", event.Name, err)
+			// 이벤트 처리
+			log.Println("처리 중인 이벤트:", event)
+			var err error
+			switch {
+			case event.Has(fsnotify.Create):
+				log.Println("File created:", event.Name)
+				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
+					if err := AddWatch(watcher, event.Name, &mu); err != nil {
+						log.Printf("Failed to add watch for directory %s: %v", event.Name, err)
+					}
+				}
+			case event.Has(fsnotify.Remove):
+				log.Println("File removed:", event.Name)
+				if err := RemoveWatch(watcher, event.Name, &mu); err != nil {
+					log.Printf("Failed to remove watch for %s: %v", event.Name, err)
+				}
+			case event.Has(fsnotify.Rename):
+				log.Println("File renamed:", event.Name)
+				if err := RemoveWatch(watcher, event.Name, &mu); err != nil {
+					log.Printf("Failed to remove watch for renamed file %s: %v", event.Name, err)
+				}
+			case event.Has(fsnotify.Write):
+				log.Println("File modified:", event.Name)
+			case event.Has(fsnotify.Chmod):
+				log.Println("File attributes changed:", event.Name)
+			}
+
+			// 에러가 발생했을 경우 에러 채널로 전달
+			if err != nil {
+				select {
+				case errChan <- fmt.Errorf("error processing event %s: %w", event.Name, err):
+				case <-ctx.Done():
+					return // 컨텍스트가 취소된 경우 반환
 				}
 			}
-
-		case event.Has(fsnotify.Remove):
-			log.Println("File removed:", event.Name)
-			if err := RemoveWatch(watcher, event.Name, &mu); err != nil {
-				log.Printf("Failed to remove watch for %s: %v", event.Name, err)
-			}
-
-		case event.Has(fsnotify.Rename):
-			log.Println("File renamed:", event.Name)
-			if err := RemoveWatch(watcher, event.Name, &mu); err != nil {
-				log.Printf("Failed to remove watch for renamed file %s: %v", event.Name, err)
-			}
-
-		case event.Has(fsnotify.Write):
-			log.Println("File modified:", event.Name)
-
-		case event.Has(fsnotify.Chmod):
-			log.Println("File attributes changed:", event.Name)
-		}
-
-		// 에러가 발생했을 경우 에러 채널로 전달
-		if err != nil {
-			errChan <- fmt.Errorf("error processing event %s: %w", event.Name, err)
 		}
 	}
 }
