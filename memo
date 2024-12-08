@@ -1,0 +1,543 @@
+package main
+
+import (
+	"encoding/csv"
+	"fmt"
+	"github.com/seoyhaein/fileparsing/rule"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
+	"unicode"
+)
+
+func main() {
+	// var totalfiles [][]string
+	// 루트 디렉토리에서 각 디렉토리를 recursive 하게 탐색해서 파일명을 가져와야 한다.
+
+	path := "/tmp/testfiles"
+	// 테스트로 빈파일 생성
+	MakeTestFiles(path)
+	files, err := ReadAllFileNames1(path)
+	if err != nil { // 에러 발생 시 종료
+		fmt.Println("Error reading file names:", err)
+		os.Exit(1)
+	}
+	for _, file := range files {
+		fmt.Printf("%s\n", file)
+	}
+	r, err := rule.LoadRuleSetFromFile("./examplerule.json")
+	if err != nil {
+		fmt.Println("Error loading rule set.")
+		os.Exit(1)
+	}
+	/*check := rule.ValidateRuleSet(r)
+	if !check {
+		os.Exit(1)
+	}*/
+
+	result, err := rule.BlockifyFilesToMap(files, r)
+	if err != nil {
+		log.Fatal(err)
+	}
+	rule.SaveResultMapToCSV("result.csv", result, r.Header)
+
+}
+
+// 일단 임시로 이렇게 만듬.
+var (
+	fileName string
+	filePath string
+)
+
+// 여기에 어떻게 잘 담을지 고민해야함.
+type DataBlock struct {
+	Original [][]string // 원본 데이터만 저장
+	RowKeys  []string   // 행 키
+	ColKeys  []string   // 열 키
+}
+
+// row 에 들어가는 것.
+// 확장자랑 상관없이 파일 이름이 같은 것들.
+
+// 확장자 같은 것들
+// 1_1.fastq 1_2.fastq
+// 확장자가 달라도 들어갈 수 있다.
+
+// colume 에 들어가는 것들. 확장자가 같은 것들
+
+// datablock 으로 넣지 않아도 되는 것들. 즉 row 를 생성하지 않아도 될 것들.
+// 파일이 unique 할것
+
+// 묶을 때 다소 충돌되는 기준이 있는데 fastq 의 경우 r1, r2 를 각각의 head로 묶어야 하는데 이 기준하고
+// 확장자가 다른 것들은 따로 따로 확장자별로 head 로 묶어 주는 경우가 바람직한데 이 기준하고 충돌됨.
+
+// 파일이름이 같고(이름만 같음), 확장자가 같은 경우
+// 확장자가 같은 경우
+// 파일이름이 같은 것 끼리 구분 지어줌.
+// 1_1.fastq 1_2.fastq 이런식으로.
+
+// 파일이름이 같고, 확장자가 다른 경우
+// 학장자가 다른 경우
+// 파일 이름이 같은 것 끼리 구분 지어줌.
+// 1.t1 1.t2 이런식으로.
+
+// head 설정 기준
+// 파일 이름이 다르고 확장자가 같은 경우
+// 파일 이름만 다르고 나머지는 같아야 함. 또는 규칙성에 위배되지 않아야 함.
+// 동일 head에 들어 갈 수 있음.
+
+// 파일 이름이 다르고 확장자가 다른 경우
+// 새로운 head 에 넣어야 함.
+
+// 디폴트로 결정되고 -> 이 기준도 기준 파일을 만들 수 있는 형식으로.
+// 사용자로 부터 구분 기준을 받는 것은 어떨까?
+
+// DataBlock1 구조체 데이터 타입은 일단 대충 넣어둠.
+type DataBlock1 struct {
+	Header []string            // 헤더 데이터
+	Rows   map[string][]string // 키와 값으로 구성된 데이터
+}
+
+func extractParts(fileName string) []string {
+	var parts []string
+	var currentPart []rune
+
+	// 문자 유형을 판별하는 함수
+	getRuneType := func(r rune) string {
+		switch {
+		case unicode.IsLetter(r):
+			return "letter"
+		case unicode.IsDigit(r):
+			return "digit"
+		case unicode.IsSpace(r):
+			return "space"
+		case unicode.IsSymbol(r):
+			return "symbol"
+		case unicode.IsPunct(r):
+			return "punctuation"
+		default:
+			return "other"
+		}
+	}
+
+	// 이전 문자의 유형
+	var previousType string
+
+	for _, r := range fileName {
+		// 현재 문자의 유형
+		currentType := getRuneType(r)
+
+		// 현재 문자와 이전 문자의 유형이 다르면 새로운 파트 시작
+		if len(currentPart) > 0 && currentType != previousType {
+			parts = append(parts, string(currentPart)) // 이전 파트 저장
+			currentPart = []rune{}                     // 새로운 파트 시작
+		}
+
+		// 현재 문자를 현재 파트에 추가
+		currentPart = append(currentPart, r)
+		previousType = currentType
+	}
+
+	// 마지막 남은 파트를 추가
+	if len(currentPart) > 0 {
+		parts = append(parts, string(currentPart))
+	}
+
+	return parts
+}
+
+// hasCombiningCharacter 조합문자 검출. 일단 조합문자는 막는 걸로 한다.
+func hasCombiningCharacter(s string) bool {
+	for _, r := range s {
+		if unicode.IsMark(r) {
+			return true
+		}
+	}
+	return false
+}
+
+// 일단 유전체 데이터 일반적인 유전체 파일명 기준으로 맞추고 그것이 맞지 않는다면 별도의 파일명 기준을 찾아내는 방식으로 맞추는 방식으로 진행한다.
+
+/*func isIlluminaParts(parts []string) bool {
+	// Illumina 주요 파츠 검증
+	// sample1_S1_L001_R1_001.fastq.gz를 예상
+	partsCount := len(parts)
+	if partsCount < 3 {
+		return false
+	} // 최소 3개 이상 sample.fastq (smaple . fastq)
+
+	// "S1": 샘플 번호는 S로 시작하고 뒤에 숫자
+	sampleIndex := -1
+	for i, part := range parts {
+		if strings.HasPrefix(part, "S") && isNumber(part[1:]) {
+			sampleIndex = i
+			break
+		}
+	}
+	if sampleIndex == -1 {
+		return false // S1이 없음
+	}
+
+	// "L001": 레인 번호는 L로 시작하고 뒤에 숫자
+	laneIndex := -1
+	for i, part := range parts {
+		if strings.HasPrefix(part, "L") && isNumber(part[1:]) {
+			laneIndex = i
+			break
+		}
+	}
+	if laneIndex == -1 {
+		return false // L001이 없음
+	}
+
+	// "R1" 또는 "R2": 읽기 방향
+	readIndex := -1
+	for i, part := range parts {
+		if part == "R1" || part == "R2" {
+			readIndex = i
+			break
+		}
+	}
+	if readIndex == -1 {
+		return false // R1 또는 R2가 없음
+	}
+
+	// "001": 반복 번호는 숫자여야 함
+	repeatIndex := -1
+	for i, part := range parts {
+		if isNumber(part) {
+			repeatIndex = i
+			break
+		}
+	}
+	if repeatIndex == -1 {
+		return false // 반복 번호가 없음
+	}
+
+	// ".fastq.gz" 또는 ".fastq"로 끝나야 함
+	if !strings.HasSuffix(parts[len(parts)-1], ".fastq.gz") && !strings.HasSuffix(parts[len(parts)-1], ".fastq") {
+		return false // 확장자가 올바르지 않음
+	}
+
+	return true
+}*/
+
+// 이런식으로 하면 모든 확장자를 다 확인 해야 하는 어려움이 있음.
+func findSuffixFastq(parts []string) (bool, string) {
+	// sample.fastq 가 최소 조합임. => "sample", ".", "fastq"
+	if len(parts) < 3 {
+		return false, ""
+	}
+
+	if strings.HasSuffix(parts[len(parts)-1], "fastq") {
+		return true, "fastq"
+	}
+
+	if strings.HasSuffix(parts[len(parts)-1], "fq") {
+		return true, "fq"
+	}
+	// sample.fastq.gz 일 경우. => "sample", ".", "fastq", ".", "gz"
+	if strings.HasSuffix(parts[len(parts)-1], "gz") {
+		if strings.HasSuffix(parts[len(parts)-3], "fastq") {
+			return true, "fastq.gz"
+		}
+
+		if strings.HasSuffix(parts[len(parts)-3], "fq") {
+			return true, "fq.gz"
+		}
+	}
+
+	return false, ""
+}
+
+// isNumber: 문자열이 숫자인지 확인
+func isNumber(s string) bool {
+	for _, r := range s {
+		if !unicode.IsDigit(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// 먼저 확장자 별로 묶어둔다.
+// 특정 디렉토리에서 확장자별로 묶는다. 만약 특정 디렉토리에 확장자가 다른 것들이 있다면 각각 묶지만 에러를 리턴한다.
+// 일단 파일을 묶는 것은 proto 방식으로 파일을 묶는다.
+
+// ReadAllFileNames 특정 디렉토리에서 모든 파일 이름을 읽어오는 함수
+func ReadAllFileNames(dirPath string) ([]string, error) {
+	// 디렉토리의 파일 목록 읽기
+	files, err := os.ReadDir(dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read directory %s: %w", dirPath, err)
+	}
+
+	// 파일 이름을 저장할 슬라이스
+	var fileNames []string
+
+	// 파일 목록에서 이름만 추출
+	for _, file := range files {
+		// 파일 이름을 경로와 함께 추가
+		fileNames = append(fileNames, filepath.Join(dirPath, file.Name())) // Append to the End
+	}
+
+	return fileNames, nil
+}
+
+// ReadAllFileNames1 일단 임시로 만듬.
+func ReadAllFileNames1(dirPath string) ([]string, error) {
+	// 디렉토리의 파일 목록 읽기
+	files, err := os.ReadDir(dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read directory %s: %w", dirPath, err)
+	}
+
+	// 파일 이름을 저장할 슬라이스
+	var fileNames []string
+
+	// 파일 목록에서 이름만 추출
+	for _, file := range files {
+		// 파일 이름을 경로와 함께 추가
+		fileNames = append(fileNames, file.Name()) // Append to the End
+	}
+
+	return fileNames, nil
+}
+
+func ExtractFileParts(files []string) ([][]string, error) {
+	var data [][]string
+	var skippedFiles []string // 조합 문자가 포함된 파일 이름 목록
+
+	for _, file := range files {
+		if hasCombiningCharacter(file) {
+			skippedFiles = append(skippedFiles, file) // 조합 문자 파일을 건너뜀
+			continue
+		}
+		parts := extractParts(file)
+		data = append(data, parts)
+	}
+
+	// 조합 문자 포함 파일이 있었는지 확인
+	if len(skippedFiles) > 0 {
+		errMsg := fmt.Sprintf("Skipped files with combining characters: %v", skippedFiles)
+		return data, fmt.Errorf(errMsg)
+	}
+
+	return data, nil
+}
+
+func MakeTestFiles(path string) {
+	// 디렉토리 생성
+	err := os.MkdirAll(path, os.ModePerm)
+	if err != nil {
+		log.Fatalf("Failed to create directory %s: %v", path, err)
+	}
+
+	// 디렉토리 권한을 777로 설정 os.ModePerm 해줌.
+	/*err = os.Chmod(path, 0777) //0o777 이 방식보다 0777 방식 사용
+	if err != nil {
+		log.Fatalf("Failed to set permissions for directory %s: %v", path, err)
+	}*/
+
+	// 테스트 파일 이름 목록
+	fileNames := []string{
+		"sample1_S1_L001_R1_001.fastq.gz",
+		"sample1_S1_L001_R2_001.fastq.gz",
+		"sample1_S1_L002_R1_001.fastq.gz",
+		"sample1_S1_L002_R2_001.fastq.gz",
+		"sample2_S2_L001_R1_001.fastq.gz",
+		"sample2_S2_L001_R2_001.fastq.gz",
+		"sample2_S2_L002_R1_001.fastq.gz",
+		"sample2_S2_L002_R2_001.fastq.gz",
+		"sample3_S3_L001_R1_001.fastq.gz",
+		"sample3_S3_L001_R2_001.fastq.gz",
+		"sample3_S3_L002_R1_001.fastq.gz",
+		"sample3_S3_L002_R2_001.fastq.gz",
+		"sample4_S4_L001_R1_001.fastq.gz",
+		"sample4_S4_L001_R2_001.fastq.gz",
+		"sample4_S4_L002_R1_001.fastq.gz",
+		"sample4_S4_L002_R2_001.fastq.gz",
+		"sample5_S5_L001_R1_001.fastq.gz",
+		"sample5_S5_L001_R2_001.fastq.gz",
+		"sample5_S5_L002_R1_001.fastq.gz",
+		"sample5_S5_L002_R2_001.fastq.gz",
+		"sample6_S6_L001_R1_001.fastq.gz",
+		"sample6_S6_L001_R2_001.fastq.gz",
+		"sample6_S6_L002_R1_001.fastq.gz",
+		"sample6_S6_L002_R2_001.fastq.gz",
+		"sample7_S7_L001_R1_001.fastq.gz",
+		"sample7_S7_L001_R2_001.fastq.gz",
+		"sample7_S7_L002_R1_001.fastq.gz",
+		"sample7_S7_L002_R2_001.fastq.gz",
+		"sample8_S8_L001_R1_001.fastq.gz",
+		"sample8_S8_L001_R2_001.fastq.gz",
+		"sample8_S8_L002_R1_001.fastq.gz",
+		"sample8_S8_L002_R2_001.fastq.gz",
+		"sample9_S9_L001_R1_001.fastq.gz",
+		"sample9_S9_L001_R2_001.fastq.gz",
+		"sample9_S9_L002_R1_001.fastq.gz",
+		"sample9_S9_L002_R2_001.fastq.gz",
+		"sample10_S10_L001_R1_001.fastq.gz",
+		"sample10_S10_L001_R2_001.fastq.gz",
+		"sample10_S10_L002_R1_001.fastq.gz",
+		"sample10_S10_L002_R2_001.fastq.gz",
+		"sample11_S11_L001_R1_001.fastq.gz",
+		"sample11_S11_L001_R2_001.fastq.gz",
+		"sample11_S11_L002_R1_001.fastq.gz",
+		"sample11_S11_L002_R2_001.fastq.gz",
+		"sample12_S12_L001_R1_001.fastq.gz",
+		"sample12_S12_L001_R2_001.fastq.gz",
+		"sample12_S12_L002_R1_001.fastq.gz",
+		"sample12_S12_L002_R2_001.fastq.gz",
+	}
+
+	/*incompleteFileNames := []string{
+		"sample1_S1_L001_R1_001.fastq.gz",
+		"sample1_S1_L001_R2_001.fastq.gz",
+		"sample13_S13_L001_R1.fastq.gz",
+		"sample14_S14_L001_R2_001.fastq",
+		"sample15_S15_L001_001.fastq.gz",
+		"sample16_S16_L001.fastq.gz",
+	}*/
+
+	// 파일 생성
+	for _, fileName := range fileNames {
+		filePath := fmt.Sprintf("%s/%s", path, fileName)
+		_, err := os.Create(filePath)
+		if err != nil {
+			log.Fatalf("Failed to create file %s: %v", filePath, err)
+		} else {
+			log.Printf("Created file: %s", filePath)
+		}
+	}
+}
+
+// GetAllExtensions returns all extensions in a file name as a slice of strings.
+func GetAllExtensions(fileName string) []string {
+	var extensions []string
+	for {
+		ext := filepath.Ext(fileName)
+		if ext == "" {
+			break
+		}
+		extensions = append([]string{ext}, extensions...) // Prepend to maintain order
+		fileName = strings.TrimSuffix(fileName, ext)      // Remove the last extension
+	}
+	return extensions
+}
+
+func GetAllExtensionsAsString(fileName string) string {
+	var extensions []string
+	for {
+		ext := filepath.Ext(fileName)
+		if ext == "" {
+			break
+		}
+		extensions = append([]string{ext}, extensions...) // Prepend to maintain order
+		fileName = strings.TrimSuffix(fileName, ext)      // Remove the last extension
+	}
+	return strings.Join(extensions, "") // Concatenate all extensions
+}
+
+func GetAllExtensionsAsString1(fileName string) (baseName string, extensions string) {
+	var extList []string
+
+	for {
+		ext := filepath.Ext(fileName)
+		if ext == "" {
+			break
+		}
+		extList = append([]string{ext}, extList...)  // Prepend to maintain order
+		fileName = strings.TrimSuffix(fileName, ext) // Remove the last extension
+	}
+
+	baseName = fileName
+	extensions = strings.Join(extList, "") // Combine extensions
+
+	return baseName, extensions
+}
+
+func GetAllExtensionsAsStringOptimized(fileName string) string {
+	var extensions string
+	for {
+		ext := filepath.Ext(fileName)
+		if ext == "" {
+			break
+		}
+		extensions = ext + extensions                // Prepend directly to the result string
+		fileName = strings.TrimSuffix(fileName, ext) // Remove the last extension
+	}
+	return extensions
+}
+
+// GroupFilesByExtension 확장자별로 파일 이름을 그룹화
+func GroupFilesByExtension(fileNames []string) map[string][]string {
+	groups := make(map[string][]string)
+
+	for _, fileName := range fileNames {
+		// 파일 확장자를 추출
+		baseName, extensions := GetAllExtensionsAsString1(fileName)
+
+		// 확장자를 키로 그룹에 추가
+		groups[extensions] = append(groups[extensions], baseName)
+	}
+	return groups
+}
+
+// IsFastqFiles fastq 파일인지
+func IsFastqFiles(groups map[string][]string) (bool, error) {
+	// 맵의 키 개수를 확인
+	if len(groups) != 1 {
+		return false, fmt.Errorf("map must contain exactly one key, but it has %d keys", len(groups))
+	}
+
+	// 맵의 첫 번째 키를 가져오기
+	for ext := range groups {
+		// fastq 또는 fq 포함 여부 반환
+		return strings.Contains(ext, "fastq") || strings.Contains(ext, "fq"), nil
+	}
+
+	// 이 부분은 실행되지 않음 (안전성 유지용)
+	return false, fmt.Errorf("unexpected error: map is empty after length check")
+}
+
+// ValidateKeyCount 키 개수 검증 메서드
+func ValidateKeyCount(groupedFiles map[string][]string, maxKeys int) error {
+	if len(groupedFiles) > maxKeys {
+		return fmt.Errorf("error: map contains more than %d keys; found %d keys", maxKeys, len(groupedFiles))
+	}
+	return nil
+}
+
+/*
+// 검증 실행
+	err := ValidateKeyCount(groupedFiles, 1) // maxKeys를 1로 설정
+	if err != nil {
+		fmt.Println("Validation failed:", err)
+	} else {
+		fmt.Println("Validation passed: map contains acceptable number of keys.")
+	}
+*/
+
+func WriteCSV(data [][]string, filePath string) error {
+	// CSV 파일 생성
+	file, err := os.Create(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to create file: %w", err)
+	}
+	defer file.Close()
+
+	// CSV Writer 생성
+	writer := csv.NewWriter(file)
+	defer writer.Flush() // 데이터 플러시
+
+	// 데이터를 CSV에 쓰기
+	for _, row := range data {
+		if err := writer.Write(row); err != nil {
+			return fmt.Errorf("failed to write row: %w", err)
+		}
+	}
+
+	return nil
+}
