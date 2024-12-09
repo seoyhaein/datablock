@@ -6,12 +6,13 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // RuleSet 구조체 정의
-
 type RuleSet struct {
 	Version     string      `json:"version"`
 	Delimiter   []string    `json:"delimiter"`
@@ -36,6 +37,22 @@ type SizeRules struct {
 
 // LoadRuleSetFromFile JSON 파일을 읽어 RuleSet 구조체로 디코딩
 func LoadRuleSetFromFile(filePath string) (RuleSet, error) {
+	// filePath가 디렉토리인지 확인
+	fileInfo, err := os.Stat(filePath)
+	if err != nil {
+		return RuleSet{}, fmt.Errorf("failed to access path: %w", err)
+	}
+
+	if fileInfo.IsDir() {
+		// 디렉토리 내 rule.json 파일 경로 확인
+		filePath = filepath.Join(filePath, "rule.json")
+	}
+
+	// rule.json 파일 존재 여부 확인
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		return RuleSet{}, fmt.Errorf("rule file not found at %s", filePath)
+	}
+
 	// JSON 파일 읽기
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -103,6 +120,72 @@ func BlockifyFilesToMap(fileNames []string, ruleSet RuleSet) (map[int]map[string
 	return resultMap, nil
 }
 
+// FilterMap 컬럼 수를 검증하고 유효/무효 행을 분리하는 메서드
+func FilterMap(resultMap map[int]map[string]string, expectedColCount int) (map[int]map[string]string, []map[string]string) {
+	validRows := make(map[int]map[string]string)
+	var invalidRows []map[string]string
+	newRowCounter := 0
+
+	for _, row := range resultMap {
+		if len(row) == expectedColCount {
+			validRows[newRowCounter] = row
+			newRowCounter++
+		} else {
+			invalidRows = append(invalidRows, row)
+		}
+	}
+
+	return validRows, invalidRows
+}
+
+// WriteInvalidFiles invalidRows의 파일명을 하나의 텍스트 파일에 기록
+func WriteInvalidFiles(invalidRows []map[string]string, outputFilePath string) (err error) {
+	// invalidRows가 비어있으면 파일을 생성하지 않고 리턴
+	if len(invalidRows) == 0 {
+		return nil
+	}
+
+	// outputFilePath가 디렉토리인지 확인
+	fileInfo, err := os.Stat(outputFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to access path %s: %w", outputFilePath, err)
+	}
+
+	// 디렉토리인 경우, 날짜와 시간을 포함한 파일명을 생성
+	if fileInfo.IsDir() {
+		timestamp := time.Now().Format("20060102150405") // 현재 날짜와 시간 (년월일시간분초)
+		outputFilePath = filepath.Join(outputFilePath, fmt.Sprintf("invalid_files_%s.txt", timestamp))
+	}
+
+	// 출력 파일 생성 (덮어쓰기)
+	file, err := os.Create(outputFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to create file %s: %w", outputFilePath, err)
+	}
+
+	defer func() {
+		if cerr := file.Close(); cerr != nil {
+			if err == nil {
+				err = fmt.Errorf("failed to close file: %w", cerr)
+			} else {
+				err = fmt.Errorf("%v; failed to close file: %w", err, cerr)
+			}
+		}
+	}()
+
+	// 파일명들을 텍스트 파일에 기록
+	for _, row := range invalidRows {
+		for _, fileName := range row {
+			_, err := file.WriteString(fileName + "\n")
+			if err != nil {
+				return fmt.Errorf("failed to write to file %s: %w", outputFilePath, err)
+			}
+		}
+	}
+
+	return err
+}
+
 // ValidateRuleSet validates the given rule set for conflicts and unused parts.
 func ValidateRuleSet(ruleSet RuleSet) bool {
 	hasConflict := false // 충돌 여부를 저장
@@ -135,49 +218,34 @@ func ValidateRuleSet(ruleSet RuleSet) bool {
 	return !hasConflict
 }
 
-// SaveResultMapToCSV map[int]map[string]string 데이터를 CSV 파일로 저장
-func SaveResultMapToCSV1(filePath string, resultMap map[int]map[string]string, headers []string) error {
+// SaveResultMapToCSV map[int]map[string]string 데이터를 CSV 파일로 저장, TODO 파일 생성날짜를 기록할지 생각
+func SaveResultMapToCSV(filePath string, resultMap map[int]map[string]string, headers []string) (err error) {
+	// filePath 가 디렉토리인지 확인
+	fileInfo, err := os.Stat(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to access path: %w", err)
+	}
+
+	if fileInfo.IsDir() {
+		// 디렉토리 경로에 fileblock.csv 파일 생성
+		filePath = filepath.Join(filePath, "fileblock.csv")
+	}
+
 	file, err := os.Create(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to create file: %w", err)
 	}
-	defer file.Close()
 
-	writer := csv.NewWriter(file)
-	defer writer.Flush()
-
-	// 첫 번째 행에 헤더 추가
-	headerRow := append([]string{"Row"}, headers...)
-	if err := writer.Write(headerRow); err != nil {
-		return fmt.Errorf("failed to write header row: %w", err)
-	}
-
-	// 각 행 데이터를 CSV에 추가
-	for rowIdx := 0; rowIdx < len(resultMap); rowIdx++ {
-		rowData := make([]string, len(headers)+1) // +1은 "Row" 열 때문
-		rowData[0] = fmt.Sprintf("Row%d", rowIdx)
-		// row 는 map[key]filename 임.
-		if row, exists := resultMap[rowIdx]; exists {
-			for colIdx, header := range headers {
-				rowData[colIdx+1] = row[header]
+	//defer file.Close()
+	defer func() {
+		if cerr := file.Close(); cerr != nil {
+			if err == nil {
+				err = fmt.Errorf("failed to close file: %w", cerr)
+			} else {
+				err = fmt.Errorf("%v; failed to close file: %w", err, cerr)
 			}
 		}
-
-		if err := writer.Write(rowData); err != nil {
-			return fmt.Errorf("failed to write row: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// SaveResultMapToCSV map[int]map[string]string 데이터를 CSV 파일로 저장
-func SaveResultMapToCSV(filePath string, resultMap map[int]map[string]string, headers []string) error {
-	file, err := os.Create(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to create file: %w", err)
-	}
-	defer file.Close()
+	}()
 
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
@@ -221,5 +289,86 @@ func SaveResultMapToCSV(filePath string, resultMap map[int]map[string]string, he
 		}
 	}
 
+	return err
+}
+
+// ApplyRule 적용된 규칙에 따라 파일을 처리
+func ApplyRule(filePath string) error {
+	// Load the rule set
+	ruleSet, err := LoadRuleSetFromFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to load rule set: %w", err)
+	}
+
+	// Validate the rule set
+	if !ValidateRuleSet(ruleSet) {
+		return fmt.Errorf("rule set has conflicts or unused parts")
+	}
+
+	// Read all file names from the directory
+	// 예외 규정: rule.json, invalid_files로 시작하는 파일, fileblock.csv
+	exclusions := []string{"rule.json", "invalid_files", "fileblock.csv"}
+	files, err := ReadAllFileNames(filePath, exclusions)
+
+	if err != nil {
+		return fmt.Errorf("failed to read file names: %w", err)
+	}
+
+	// Blockify files using the rule set
+	resultMap, err := BlockifyFilesToMap(files, ruleSet)
+	if err != nil {
+		return fmt.Errorf("failed to blockify files: %w", err)
+	}
+
+	// Filter the result map into valid and invalid rows
+	validRows, invalidRows := FilterMap(resultMap, len(ruleSet.Header))
+
+	// Save valid rows to a CSV file
+	if err := SaveResultMapToCSV(filePath, validRows, ruleSet.Header); err != nil {
+		return fmt.Errorf("failed to save result map to CSV: %w", err)
+	}
+
+	// Save invalid rows to a separate file
+	if err := WriteInvalidFiles(invalidRows, filePath); err != nil {
+		return fmt.Errorf("failed to write invalid files: %w", err)
+	}
+
 	return nil
+}
+
+// ReadAllFileNames 디렉토리에서 파일을 읽되 예외 규정에 맞는 파일들은 제외
+func ReadAllFileNames(dirPath string, exclusions []string) ([]string, error) {
+	// 디렉토리의 파일 목록 읽기
+	files, err := os.ReadDir(dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read directory %s: %w", dirPath, err)
+	}
+
+	// 파일 이름을 저장할 슬라이스
+	var fileNames []string
+
+	// 파일 목록에서 제외할 파일들을 걸러내고 이름만 추출
+	for _, file := range files {
+		fileName := file.Name()
+
+		// 예외 규정에 있는 파일이면 건너뛰기
+		if excludeFiles(fileName, exclusions) {
+			continue
+		}
+
+		// 파일 이름을 경로와 함께 추가
+		fileNames = append(fileNames, fileName)
+	}
+
+	return fileNames, nil
+}
+
+// excludeFiles 파일이 예외 규정에 포함되는지 확인
+func excludeFiles(fileName string, exclusions []string) bool {
+	for _, exclusion := range exclusions {
+		if strings.HasPrefix(fileName, exclusion) {
+			return true
+		}
+	}
+	return false
 }

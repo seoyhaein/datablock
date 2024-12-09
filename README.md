@@ -16,3 +16,15 @@
 
 ## update 
 - 로그 관련 표준 정하자.
+
+
+````golang
+	path := "/tmp/testfiles"
+	// 테스트로 빈파일 생성
+	MakeTestFiles(path)
+
+	err := rule.ApplyRule(path)
+	if err != nil { // 에러 발생 시 종료
+		os.Exit(1)
+	}
+````
