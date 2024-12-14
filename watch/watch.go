@@ -150,28 +150,6 @@ func ListenEvents(ctx context.Context, errChan chan<- error) {
 	}
 }
 
-/*
-func ListenEvents(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			log.Println("Stopping ListenEvents...")
-			return
-		case event, ok := <-watcher.Events:
-			if !ok {
-				return
-			}
-			log.Println("Event:", event)
-			addToQueue(event) // 이벤트를 큐에 추가
-		case err, ok := <-watcher.Errors:
-			if !ok {
-				return
-			}
-			log.Println("Error:", err)
-		}
-	}
-}
-*/
 // addToQueue 이벤트를 큐에 추가하는 함수
 func addToQueue(event fsnotify.Event) {
 	queueMu.Lock()
