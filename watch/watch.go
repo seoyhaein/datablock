@@ -2,21 +2,16 @@ package watch
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/fsnotify/fsnotify"
+	c "github.com/seoyhaein/datablock/config"
 	"log"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 )
-
-type Config struct {
-	MaxWatchCount int
-	RootDir       string
-}
 
 var (
 	watchCount int // 감시 디렉토리 갯수
@@ -33,16 +28,22 @@ var (
 
 func Init(path string) {
 
-	config, err := loadConfig(path)
+	config, err := c.LoadConfig(path)
 	if err != nil {
 		log.Println("loadConfig error:", err)
 		return
 	}
 	maxWatchCount = config.MaxWatchCount
 	rootDir = config.RootDir
-	watcher, err = StartWatching(nil)
+	watcher, err = StartWatching()
 	if err != nil {
 		log.Println("StartWatching error:", err)
+		return
+	}
+	// rootDir 은 이미 설정되어 있음으로 FirstWalk 내부에서 사용하고 있음. TODO: 이렇게 하는 방식은 검토할 필요가 있음.
+	// TODO: FirstWalk 내부적으로 rootDir 검사하지는 않음. filepath.clean, 디렉토리인지, "" 검사등등 필요하지 않을까 생각.
+	if err = FirstWalk(watcher); err != nil {
+		log.Println("FirstWalk error:", err)
 		return
 	}
 	log.Println("Initialization completed successfully.")
@@ -92,7 +93,7 @@ func RemoveWatch(watcher *fsnotify.Watcher, path string, mu *sync.Mutex) error {
 }
 
 // StartWatching TODO 테스트 필요 watchCount, isWatching 를 담고 있는 구조체로 만들자.
-func StartWatching(paths []string) (*fsnotify.Watcher, error) {
+func StartWatching() (*fsnotify.Watcher, error) {
 	if isWatching {
 		log.Println("Already watching.")
 		return nil, errors.New("already watching")
@@ -232,29 +233,9 @@ errChan := make(chan error)
 */
 
 // FirstWalk TODO 최초 디렉토리 검사 및 관련 파일 만들어 주기. 감시할때는 별도의 메서드드로 관련 파일 수정 및 만들어 주어야함.
-func FirstWalk(watcher *fsnotify.Watcher) error {
-	var mu sync.Mutex
-	if watcher == nil {
-		return fmt.Errorf("watcher is nil")
-	}
-
-	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return AddWatch(watcher, path, &mu)
-		}
-		return nil
-	})
-
-	return err
-}
-
-// FirstWalk1 TODO once 부분 리턴에 관해서 살펴봐야 함. 익명함수 내에서 리턴도 같이 봐야 함.
+// FirstWalk TODO once 부분 리턴에 관해서 살펴봐야 함. 익명함수 내에서 리턴도 같이 봐야 함.
 // 관련파일을 작성해주는 메서드를 만들어 줘야 함.
-// TODO context 넣어 주어야 함.
-func FirstWalk1(watcher *fsnotify.Watcher) error {
+func FirstWalk(watcher *fsnotify.Watcher) error {
 	var mu sync.Mutex
 	var err error
 
@@ -277,52 +258,4 @@ func FirstWalk1(watcher *fsnotify.Watcher) error {
 	})
 
 	return err // once.Do 이후 최종 반환
-}
-
-func loadConfig(filename string) (*Config, error) {
-	// Open the file
-	file, err := os.Open(filename)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open file: %w", err)
-	}
-	defer file.Close()
-
-	// Decode JSON data into a generic map
-	decoder := json.NewDecoder(file)
-	configData := make(map[string]interface{})
-	if err := decoder.Decode(&configData); err != nil {
-		return nil, fmt.Errorf("failed to decode configuration: %w", err)
-	}
-
-	// Create a Config instance
-	config := &Config{}
-
-	// Process MaxWatchCount
-	if value, ok := configData["MaxWatchCount"]; ok {
-		if floatValue, valid := value.(float64); valid {
-			config.MaxWatchCount = int(floatValue)
-		} else {
-			log.Printf("Invalid type for MaxWatchCount in configuration")
-			return nil, fmt.Errorf("invalid type for MaxWatchCount")
-		}
-	} else {
-		log.Printf("Missing MaxWatchCount in configuration")
-		return nil, fmt.Errorf("missing MaxWatchCount in configuration")
-	}
-
-	// Process rootDir
-	if value, ok := configData["rootDir"]; ok {
-		if stringValue, valid := value.(string); valid {
-			config.RootDir = stringValue
-		} else {
-			log.Printf("Invalid type for rootDir in configuration")
-			return nil, fmt.Errorf("invalid type for rootDir")
-		}
-	} else {
-		log.Printf("Missing rootDir in configuration")
-		return nil, fmt.Errorf("missing rootDir in configuration")
-	}
-
-	// Return the populated config
-	return config, nil
 }

@@ -35,8 +35,13 @@ type SizeRules struct {
 	MaxSize int `json:"maxSize"`
 }
 
-// LoadRuleSetFromFile JSON 파일을 읽어 RuleSet 구조체로 디코딩
+// LoadRuleSetFromFile JSON 파일을 읽어 RuleSet 구조체로 디코딩. RuleSet 의 경우 값의 수정이 일어나면 안되기때문에 값으로 리턴한다.
 func LoadRuleSetFromFile(filePath string) (RuleSet, error) {
+	if filePath == "" {
+		return RuleSet{}, fmt.Errorf("file path cannot be empty")
+	}
+	// path 에 대한 정규화
+	filePath = filepath.Clean(filePath)
 	// filePath가 디렉토리인지 확인
 	fileInfo, err := os.Stat(filePath)
 	if err != nil {
@@ -53,7 +58,7 @@ func LoadRuleSetFromFile(filePath string) (RuleSet, error) {
 		return RuleSet{}, fmt.Errorf("rule file not found at %s", filePath)
 	}
 
-	// JSON 파일 읽기
+	// JSON 파일 읽기, 파일이 크지 않기 때문에 이렇게 처리 함.
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return RuleSet{}, fmt.Errorf("failed to read file: %w", err)
@@ -138,7 +143,7 @@ func FilterMap(resultMap map[int]map[string]string, expectedColCount int) (map[i
 	return validRows, invalidRows
 }
 
-// WriteInvalidFiles invalidRows의 파일명을 하나의 텍스트 파일에 기록
+// WriteInvalidFiles invalidRows의 파일명을 하나의 텍스트 파일에 기록 TODO readonly 로 하는 것 생각
 func WriteInvalidFiles(invalidRows []map[string]string, outputFilePath string) (err error) {
 	// invalidRows가 비어있으면 파일을 생성하지 않고 리턴
 	if len(invalidRows) == 0 {
@@ -188,38 +193,40 @@ func WriteInvalidFiles(invalidRows []map[string]string, outputFilePath string) (
 
 // ValidateRuleSet validates the given rule set for conflicts and unused parts.
 func ValidateRuleSet(ruleSet RuleSet) bool {
-	hasConflict := false // 충돌 여부를 저장
+	hasConflict := false
 
-	// Helper 함수: 충돌 감지 및 로깅
-	logConflict := func(message string, idx int) {
-		log.Printf(message, idx)
-		hasConflict = true
-	}
+	usageMap := make(map[int][]string)
 
-	// Row와 Column 규칙 매핑
-	rowMatch := make(map[int]struct{})
-	colMatch := make(map[int]struct{})
-
-	for _, idx := range ruleSet.RowRules.MatchParts {
-		rowMatch[idx] = struct{}{}
-	}
-	for _, idx := range ruleSet.ColumnRules.MatchParts {
-		colMatch[idx] = struct{}{}
-	}
-
-	// Row와 Column 규칙의 MatchParts와 UnMatchParts에서 충돌 확인
-	for idx := range rowMatch {
-		if _, exists := colMatch[idx]; exists {
-			logConflict("Conflict detected: part %d is in both RowRules.MatchParts and ColumnRules.MatchParts", idx)
+	// Helper for registering usage of parts
+	addUsage := func(indices []int, roleName string) {
+		for _, idx := range indices {
+			usageMap[idx] = append(usageMap[idx], roleName)
 		}
 	}
 
-	// 최종 결과 반환
+	// Register usages
+	addUsage(ruleSet.RowRules.MatchParts, "RowRules.MatchParts")
+	addUsage(ruleSet.ColumnRules.MatchParts, "ColumnRules.MatchParts")
+
+	// Check for conflicts - any index used in more than one role is a conflict
+	for idx, roles := range usageMap {
+		if len(roles) > 1 {
+			log.Printf("Conflict detected: part %d is used in multiple roles: %v", idx, roles)
+			hasConflict = true
+		}
+	}
+
 	return !hasConflict
 }
 
-// SaveResultMapToCSV map[int]map[string]string 데이터를 CSV 파일로 저장, TODO 파일 생성날짜를 기록할지 생각
+// SaveResultMapToCSV map[int]map[string]string 데이터를 CSV 파일로 저장, TODO 파일 생성날짜를 기록할지 생각, readonly 로 하는 것 생각.
 func SaveResultMapToCSV(filePath string, resultMap map[int]map[string]string, headers []string) (err error) {
+	if filePath == "" {
+		return fmt.Errorf("file path cannot be empty")
+	}
+	// path 에 대한 정규화
+	filePath = filepath.Clean(filePath)
+
 	// filePath 가 디렉토리인지 확인
 	fileInfo, err := os.Stat(filePath)
 	if err != nil {
@@ -292,7 +299,9 @@ func SaveResultMapToCSV(filePath string, resultMap map[int]map[string]string, he
 	return err
 }
 
-// ApplyRule 적용된 규칙에 따라 파일을 처리
+// ApplyRule 적용된 규칙에 따라 파일을 처리 // TODO 추가적으로 예외 파일을 넣을 수 있도록 옵션으로 넣어 둔다.
+// 해당 디렉토리에 rule.json, invalid_files, fileblock.csv 반드시 존재해아 하는데 이거 검사하는 메서드 있나??
+// TODO path 나 디렉토리 관련 정규화 적용할 것. 여기서 정규화 하고 다른 메서드들은 반복되지 않도록 처리한다.
 func ApplyRule(filePath string) error {
 	// Load the rule set
 	ruleSet, err := LoadRuleSetFromFile(filePath)
@@ -336,7 +345,51 @@ func ApplyRule(filePath string) error {
 	return nil
 }
 
-// ReadAllFileNames 디렉토리에서 파일을 읽되 예외 규정에 맞는 파일들은 제외
+// ConnectProto 이름 막 지음.
+func ConnectProto(filePath string) (map[int]map[string]string, error) {
+	// Load the rule set
+	ruleSet, err := LoadRuleSetFromFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load rule set: %w", err)
+	}
+
+	// Validate the rule set
+	if !ValidateRuleSet(ruleSet) {
+		return nil, fmt.Errorf("rule set has conflicts or unused parts")
+	}
+
+	// Read all file names from the directory
+	// 예외 규정: rule.json, invalid_files로 시작하는 파일, fileblock.csv
+	exclusions := []string{"rule.json", "invalid_files", "fileblock.csv"}
+	files, err := ReadAllFileNames(filePath, exclusions)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file names: %w", err)
+	}
+
+	// Blockify files using the rule set
+	resultMap, err := BlockifyFilesToMap(files, ruleSet)
+	if err != nil {
+		return nil, fmt.Errorf("failed to blockify files: %w", err)
+	}
+
+	// Filter the result map into valid and invalid rows
+	validRows, invalidRows := FilterMap(resultMap, len(ruleSet.Header))
+
+	// Save valid rows to a CSV file
+	if err := SaveResultMapToCSV(filePath, validRows, ruleSet.Header); err != nil {
+		return nil, fmt.Errorf("failed to save result map to CSV: %w", err)
+	}
+
+	// Save invalid rows to a separate file
+	if err := WriteInvalidFiles(invalidRows, filePath); err != nil {
+		return nil, fmt.Errorf("failed to write invalid files: %w", err)
+	}
+
+	return validRows, nil
+}
+
+// ReadAllFileNames 디렉토리에서 파일을 읽되 예외 규정에 맞는 파일들은 제외 TODO path 나 디렉토리 관련 정규화 적용할 것.
 func ReadAllFileNames(dirPath string, exclusions []string) ([]string, error) {
 	// 디렉토리의 파일 목록 읽기
 	files, err := os.ReadDir(dirPath)

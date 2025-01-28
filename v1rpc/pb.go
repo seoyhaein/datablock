@@ -6,6 +6,7 @@ import (
 	"google.golang.org/protobuf/encoding/prototext"
 	"google.golang.org/protobuf/proto"
 	"os"
+	"sort"
 )
 
 func SaveProtoToFile(filePath string, message proto.Message, perm os.FileMode) error {
@@ -134,4 +135,34 @@ func GenerateRows(data [][]string, headers []string) []*pb.Row {
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+// ConvertMapToFileBlockData map[int]map[string]string 를 FileBlockData 메시지로 변환 TODO 에러 넣어야 하지 않을까?
+func ConvertMapToFileBlockData(rows map[int]map[string]string, headers []string, blockID string) *pb.FileBlockData {
+	fbd := &pb.FileBlockData{
+		BlockId:       blockID,
+		ColumnHeaders: headers, // 사용자 정의 헤더
+		Rows:          make([]*pb.Row, 0, len(rows)),
+	}
+
+	// rowIndex를 정렬해 순차적으로 처리
+	rowIndices := make([]int, 0, len(rows))
+	for idx := range rows {
+		rowIndices = append(rowIndices, idx)
+	}
+	sort.Ints(rowIndices)
+
+	for _, rIdx := range rowIndices {
+		columns := rows[rIdx]
+		r := &pb.Row{
+			RowNumber:   int32(rIdx), // 1-based. 필요에 맞게 조정
+			CellColumns: make(map[string]string, len(columns)),
+		}
+		// 열 데이터를 그대로 저장
+		for colKey, value := range columns {
+			r.CellColumns[colKey] = value
+		}
+		fbd.Rows = append(fbd.Rows, r)
+	}
+	return fbd
 }

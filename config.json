@@ -1,4 +1,4 @@
 {
   "MaxWatchCount": 10,
-  "rootDir": "/opt/test/"
+  "rootDir": "/tmp/testfolder/"
 }
