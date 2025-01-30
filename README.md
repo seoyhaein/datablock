@@ -1,4 +1,4 @@
-# datablock
+# datablock (Blocky 라고 이름 바꾸는 것을 생각해보자.)
 
 ## dependencies
 - fsnotify
@@ -49,7 +49,7 @@
 ````
 
 - 일단 watch 를 분리할 예정임.
-- 
+- 통합한 파일정보들에서 파일들을 찾는 구문도 넣어야 함. 그리고 해당 파일 정보들을 업데이트 하는 방법도 생각해야함.
 ### maing.go backup
 ```go
 package main

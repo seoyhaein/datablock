@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"database/sql"
 	"fmt"
 	"log"
 	"os"
@@ -91,4 +92,23 @@ func MakeTestFiles(path string) {
 			log.Printf("Created file: %s", filePath)
 		}
 	}
+}
+
+func ConnectDB(driverName, dataSourceName string) (*sql.DB, error) {
+	return sql.Open(driverName, dataSourceName)
+}
+
+// ExecuteSQLFile SQL 파일을 읽어 실행하는 함수
+func ExecuteSQLFile(db *sql.DB, filePath string) error {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("SQL 파일 읽기 실패: %w", err)
+	}
+
+	_, err = db.Exec(string(content))
+	if err != nil {
+		return fmt.Errorf("SQL 실행 실패: %w", err)
+	}
+
+	return nil
 }

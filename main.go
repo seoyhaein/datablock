@@ -1,15 +1,35 @@
 package main
 
+// TODO 코드 정리 필요.
 import (
+	c "github.com/seoyhaein/datablock/config"
 	r "github.com/seoyhaein/datablock/rule"
 	u "github.com/seoyhaein/datablock/utils"
 	v1rpc "github.com/seoyhaein/datablock/v1rpc"
+	"log"
 	"os"
 )
 
 func main() {
 
-	path := "/tmp/testfiles"
+	//db connection
+	db, err := u.ConnectDB("sqlite3", "file_monitor.db")
+	if err != nil {
+		os.Exit(1)
+	}
+
+	defer func() {
+		if err := db.Close(); err != nil {
+			log.Fatal("failed to close db:", err)
+			os.Exit(1) // defer 내부에서도 os.Exit 사용 가능
+		}
+	}()
+
+	config, err := c.LoadConfig("config.json")
+	if err != nil {
+		os.Exit(1)
+	}
+	path := config.RootDir
 	// 테스트로 빈파일 생성
 	// 기존 파일이 생성되어 있을 경우 권한 설정을 안해줌. 버그지만 고치지 않음.
 	u.MakeTestFiles(path)
