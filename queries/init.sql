@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS folders (
                                        path TEXT NOT NULL UNIQUE,
                                        total_size INTEGER DEFAULT 0,
                                        file_count INTEGER DEFAULT 0,
-                                       created_time DATETIME DEFAULT CURRENT_TIMESTAMP
+                                       created_time DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS files (
@@ -11,6 +11,6 @@ CREATE TABLE IF NOT EXISTS files (
                                      folder_id INTEGER NOT NULL,
                                      name TEXT NOT NULL,
                                      size INTEGER NOT NULL,
-                                     created_time DATETIME NOT NULL,
+                                     created_time DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
                                      FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE CASCADE
 );
