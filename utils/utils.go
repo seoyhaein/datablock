@@ -1,11 +1,13 @@
 package utils
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -103,21 +105,6 @@ func ConnectDB(driverName, dataSourceName string) (*sql.DB, error) {
 	return sql.Open(driverName, dataSourceName)
 }
 
-// ExecuteSQLFile is a function to execute SQL queries from a file
-func ExecuteSQLFile(db *sql.DB, filePath string) error {
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to read SQL file: %w", err)
-	}
-
-	_, err = db.Exec(string(content))
-	if err != nil {
-		return fmt.Errorf("SQL execution failed: %w", err)
-	}
-
-	return nil
-}
-
 type File struct {
 	ID          int64  `db:"id"`
 	FolderID    int64  `db:"folder_id"`
@@ -140,7 +127,7 @@ type Folder struct {
 func GetFilesWithSize(directoryPath string) (map[string]int64, error) {
 	filesInfo := make(map[string]int64)
 
-	// 폴더 내 파일 목록 탐색
+	// 폴더 내 파일 목록 탐색 **Go 1.16 이후 부터 가능.**
 	entries, err := os.ReadDir(directoryPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read directory %s: %w", directoryPath, err)
@@ -155,7 +142,9 @@ func GetFilesWithSize(directoryPath string) (map[string]int64, error) {
 		filePath := filepath.Join(directoryPath, entry.Name())
 
 		// 파일 정보 가져오기
-		fileInfo, err := os.Stat(filePath)
+		// Go 1.16 이후 부터 os.ReadDir 함수가 반환하는 DirEntry 에는 Info()메서드가 있어, 이 메서드를 사용하면 추가적인 시스템 콜 없이 파일 정보를 가져올 수 있음.
+		// fileInfo, err := os.Stat(filePath) 이 코드 대신 아래 코드로 대체 가능
+		fileInfo, err := entry.Info()
 		if err != nil {
 			return nil, fmt.Errorf("failed to get file info for %s: %w", filePath, err)
 		}
@@ -167,16 +156,28 @@ func GetFilesWithSize(directoryPath string) (map[string]int64, error) {
 	return filesInfo, nil
 }
 
-// SQL 파일을 읽어 실행하는 함수 (매개변수 개별 적용 가능)
-func executeSQLFile(tx *sql.Tx, filePath string, args ...interface{}) error {
-	// SQL 파일 읽기
+// executeSQLWithTx executes an SQL statement from the specified file
+func executeSQLWithTx(ctx context.Context, tx *sql.Tx, filePath string, args ...interface{}) error {
+	// If the provided context is nil, use the default background context.
+	// 방어적 프로그램(defensive programming) 관점에서 작성하는 것이 유리함.
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	// Read the SQL file content.
 	content, err := os.ReadFile(filePath)
 	if err != nil {
 		return fmt.Errorf("SQL 파일 읽기 실패 (%s): %w", filePath, err)
 	}
 
-	// SQL 실행
-	_, err = tx.Exec(string(content), args...)
+	// Trim any unnecessary whitespace from the SQL query.
+	query := strings.TrimSpace(string(content))
+	if query == "" {
+		return fmt.Errorf("SQL 파일 (%s)이 비어 있습니다", filePath)
+	}
+
+	// Execute the SQL query within the transaction using ExecContext.
+	_, err = tx.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("SQL 실행 실패 (%s): %w", filePath, err)
 	}
@@ -184,7 +185,45 @@ func executeSQLFile(tx *sql.Tx, filePath string, args ...interface{}) error {
 	return nil
 }
 
-// SaveFolderAndFiles TODO 이름 바꿀 필요 있음 초기 값을 설정하는 메서드임. 한번만 실행되고 말것. folderPath 검증 해야함.
+// executeSQLTx 컨텍스트 없이 호출할 때 사용
+func executeSQLTx(tx *sql.Tx, filePath string, args ...interface{}) error {
+	return executeSQLWithTx(context.Background(), tx, filePath, args...)
+}
+
+func executeSQLWithDB(ctx context.Context, db *sql.DB, filePath string, args ...interface{}) error {
+	// If the provided context is nil, use the default background context.
+	// 방어적 프로그램(defensive programming) 관점에서 작성하는 것이 유리함.
+	// 예전에 nil 이면 그냥 에러 처리했는데. 이렇게 하는게 더 좋은듯.
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	// Read the SQL file content.
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to read SQL file (%s): %w", filePath, err)
+	}
+
+	// Trim whitespace and check if the file is empty.
+	query := strings.TrimSpace(string(content))
+	if query == "" {
+		return fmt.Errorf("SQL file (%s) is empty", filePath)
+	}
+
+	// Execute the SQL statement using ExecContext.
+	_, err = db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("failed to execute SQL statement from file (%s): %w", filePath, err)
+	}
+
+	return nil
+}
+
+func executeSQLDB(db *sql.DB, filePath string, args ...interface{}) error {
+	return executeSQLWithDB(context.Background(), db, filePath, args...)
+}
+
+// SaveFolderAndFiles TODO 이름 바꿀 필요 있음 초기 값을 설정하는 메서드임. 한번만 실행되고 말것. folderPath 검증 해야함. context 넣을 것 생각해보자.
 func SaveFolderAndFiles(db *sql.DB, folderPath string) error {
 	// 1️.트랜잭션 시작
 	tx, err := db.Begin()
@@ -200,7 +239,7 @@ func SaveFolderAndFiles(db *sql.DB, folderPath string) error {
 		CreatedTime: time.Now().Format("2006-01-02 15:04:05"),
 	}
 
-	err = executeSQLFile(tx, "sql/insert_folder.sql", folder.Path, folder.TotalSize, folder.FileCount, folder.CreatedTime)
+	err = executeSQLTx(tx, "queries/insert_folder.sql", folder.Path, folder.TotalSize, folder.FileCount, folder.CreatedTime)
 	if err != nil {
 		tx.Rollback()
 		return fmt.Errorf("폴더 삽입 실패: %w", err)
@@ -224,7 +263,7 @@ func SaveFolderAndFiles(db *sql.DB, folderPath string) error {
 
 	// 5️. 파일 정보를 DB에 삽입 TODO 수정 필요 현재 시간으로
 	for name, size := range filesInfo {
-		err = executeSQLFile(tx, "sql/insert_file.sql", folderID, name, size, time.Now().Format("2006-01-02 15:04:05"))
+		err = executeSQLTx(tx, "queries/insert_file.sql", folderID, name, size, time.Now().Format("2006-01-02 15:04:05"))
 		if err != nil {
 			tx.Rollback()
 			return fmt.Errorf("파일 삽입 실패: %w", err)
@@ -232,7 +271,7 @@ func SaveFolderAndFiles(db *sql.DB, folderPath string) error {
 	}
 
 	// 6️. 폴더의 `total_size` 및 `file_count` 업데이트
-	err = executeSQLFile(tx, "sql/update_folder.sql", folderID)
+	err = executeSQLTx(tx, "queries/update_folder.sql", folderID)
 	if err != nil {
 		tx.Rollback()
 		return fmt.Errorf("폴더 통계 업데이트 실패: %w", err)
@@ -244,5 +283,29 @@ func SaveFolderAndFiles(db *sql.DB, folderPath string) error {
 		return fmt.Errorf("트랜잭션 커밋 실패: %w", err)
 	}
 
+	return nil
+}
+
+func isDBInitialized(db *sql.DB) bool {
+	var count int
+	err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('folders', 'files')").Scan(&count)
+	if err != nil {
+		log.Println("Failed to check database initialization:", err)
+		return false
+	}
+	return count == 2 // folders, files 두 테이블이 모두 있어야 true 반환
+}
+
+func InitializeDatabase(db *sql.DB) error {
+	// 데이터베이스가 초기화되지 않았다면 init.sql 실행
+	if !isDBInitialized(db) {
+		log.Println("Running database initialization...")
+		if err := executeSQLDB(db, "queries/init.sql"); err != nil {
+			return fmt.Errorf("DB 초기화 실패: %w", err)
+		}
+		log.Println("Database initialization completed successfully.")
+	} else {
+		log.Println("Database already initialized. Skipping init.sql execution.")
+	}
 	return nil
 }
