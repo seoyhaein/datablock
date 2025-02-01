@@ -159,7 +159,7 @@ func GetFilesWithSize(directoryPath string) (map[string]int64, error) {
 // executeSQLWithTx executes an SQL statement from the specified file
 func executeSQLWithTx(ctx context.Context, tx *sql.Tx, filePath string, args ...interface{}) error {
 	// If the provided context is nil, use the default background context.
-	// 방어적 프로그램(defensive programming) 관점에서 작성하는 것이 유리함.
+	// 방어적 프로그램(defensive programming) 관점에서 작성하는 것이 유리함. TODO 일단 생각해보자.
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -193,7 +193,7 @@ func executeSQLTx(tx *sql.Tx, filePath string, args ...interface{}) error {
 func executeSQLWithDB(ctx context.Context, db *sql.DB, filePath string, args ...interface{}) error {
 	// If the provided context is nil, use the default background context.
 	// 방어적 프로그램(defensive programming) 관점에서 작성하는 것이 유리함.
-	// 예전에 nil 이면 그냥 에러 처리했는데. 이렇게 하는게 더 좋은듯.
+	// 예전에 nil 이면 그냥 에러 처리했는데. 이렇게 하는게 더 좋은듯. TODO 일단 생각해보자.
 	if ctx == nil {
 		ctx = context.Background()
 	}
