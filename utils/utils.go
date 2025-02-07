@@ -3,7 +3,9 @@ package utils
 import (
 	"context"
 	"database/sql"
+	"embed"
 	"fmt"
+	utils "github.com/seoyhaein/utils"
 	"log"
 	"os"
 	"path/filepath"
@@ -223,15 +225,26 @@ func executeSQLDB(db *sql.DB, filePath string, args ...interface{}) error {
 	return executeSQLWithDB(context.Background(), db, filePath, args...)
 }
 
-// SaveFolderAndFiles TODO 이름 바꿀 필요 있음 초기 값을 설정하는 메서드임. 한번만 실행되고 말것. folderPath 검증 해야함. context 넣을 것 생각해보자.
-func SaveFolderAndFiles(db *sql.DB, folderPath string) error {
-	// 1️.트랜잭션 시작
-	tx, err := db.Begin()
+// TODO 여기서 생각할 것이 루트 폴더를 기준으로 그 밑의 1차적인 하위 폴더만의 리스트를 먼저 가지고 있어야 한다. 그래서 아래의 메서드들을 이용해서 db 를 채워야 한다.
+
+// FirstCheck 한번만 실행되고 말것. folderPath 검증 해야함. TODO 디렉토리 검증되는지 확인해야 함.
+func FirstCheck(ctx context.Context, db *sql.DB, folderPath string) error {
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	if utils.IsEmptyString(folderPath) {
+		return fmt.Errorf("폴더 경로가 비어 있습니다")
+	}
+
+	// 1. 트랜잭션 시작 (Context-aware)
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("트랜잭션 시작 실패: %w", err)
 	}
 
-	// 2️.폴더 정보 삽입 TODO 수정 필요 현재 시간으로, 여기서는 file 관련 정보를 모름.
+	// 2. 폴더 정보 삽입 (Context-aware executeSQLTx 사용)
 	folder := Folder{
 		Path:        folderPath,
 		TotalSize:   0,
@@ -239,45 +252,44 @@ func SaveFolderAndFiles(db *sql.DB, folderPath string) error {
 		CreatedTime: time.Now().Format("2006-01-02 15:04:05"),
 	}
 
-	err = executeSQLTx(tx, "queries/insert_folder.sql", folder.Path, folder.TotalSize, folder.FileCount, folder.CreatedTime)
+	err = executeSQLWithTx(ctx, tx, "queries/insert_folder.sql", folder.Path, folder.TotalSize, folder.FileCount, folder.CreatedTime)
 	if err != nil {
 		tx.Rollback()
 		return fmt.Errorf("폴더 삽입 실패: %w", err)
 	}
 
-	// 3. 폴더 ID 가져오기, TODO 향후 get_folder_id.sql 삭제 예정.
+	// 3. 폴더 ID 가져오기 (Context-aware QueryRow)
 	var folderID int64
-	err = tx.QueryRow("SELECT id FROM folders WHERE path = ?", folder.Path).Scan(&folderID)
-
+	err = tx.QueryRowContext(ctx, "SELECT id FROM folders WHERE path = ?", folder.Path).Scan(&folderID)
 	if err != nil {
 		tx.Rollback()
 		return fmt.Errorf("폴더 ID 조회 실패: %w", err)
 	}
 
-	// 4️. 폴더 내 파일 목록 가져오기
+	// 4. 폴더 내 파일 목록 가져오기 (여기서는 Context 사용이 필요하지 않을 수도 있음)
 	filesInfo, err := GetFilesWithSize(folderPath)
 	if err != nil {
 		tx.Rollback()
 		return fmt.Errorf("폴더 내 파일 정보 가져오기 실패: %w", err)
 	}
 
-	// 5️. 파일 정보를 DB에 삽입 TODO 수정 필요 현재 시간으로
+	// 5. 파일 정보를 DB에 삽입 (Context-aware executeSQLTx 사용)
 	for name, size := range filesInfo {
-		err = executeSQLTx(tx, "queries/insert_file.sql", folderID, name, size, time.Now().Format("2006-01-02 15:04:05"))
+		err = executeSQLWithTx(ctx, tx, "queries/insert_file.sql", folderID, name, size, time.Now().Format("2006-01-02 15:04:05"))
 		if err != nil {
 			tx.Rollback()
 			return fmt.Errorf("파일 삽입 실패: %w", err)
 		}
 	}
 
-	// 6️. 폴더의 `total_size` 및 `file_count` 업데이트
-	err = executeSQLTx(tx, "queries/update_folder.sql", folderID)
+	// 6. 폴더의 total_size 및 file_count 업데이트 (Context-aware)
+	err = executeSQLWithTx(ctx, tx, "queries/update_folder.sql", folderID)
 	if err != nil {
 		tx.Rollback()
 		return fmt.Errorf("폴더 통계 업데이트 실패: %w", err)
 	}
 
-	// 7️. 트랜잭션 커밋
+	// 7. 트랜잭션 커밋
 	err = tx.Commit()
 	if err != nil {
 		return fmt.Errorf("트랜잭션 커밋 실패: %w", err)
@@ -304,6 +316,168 @@ func InitializeDatabase(db *sql.DB) error {
 			return fmt.Errorf("DB 초기화 실패: %w", err)
 		}
 		log.Println("Database initialization completed successfully.")
+	} else {
+		log.Println("Database already initialized. Skipping init.sql execution.")
+	}
+	return nil
+}
+
+// TODO 테스트 필요.
+// ----------------------------------------------------------------------------
+// 아래부터는 embed 방식으로 SQL 파일을 읽어오는 새로운 함수들입니다.
+// 기존 함수들은 그대로 남겨두고, 파일 경로 대신 SQL 파일명을 전달하여 embed된 파일에서 내용을 읽어옵니다.
+
+// embed 패키지를 사용하여 쿼리 파일들을 포함합니다.
+// 이 예제에서는 utils 패키지 파일 기준 상위 폴더의 queries 폴더 내의 모든 .sql 파일을 포함합니다.
+//
+// 주의: 실제 프로젝트 디렉토리 구조에 맞게 경로를 조정해야 합니다.
+// 예: utils 폴더 안에 있을 경우 "../queries/*.sql" 처럼.
+
+//go:embed ../queries/*.sql
+var sqlFiles embed.FS
+
+// getSQLQuery  파일명을 입력받아 해당 SQL 파일의 내용 반환
+func getSQLQuery(fileName string) (string, error) {
+	// "queries/" 디렉토리 내의 파일을 읽어옵니다.
+	bytes, err := sqlFiles.ReadFile("queries/" + fileName)
+	if err != nil {
+		return "", fmt.Errorf("failed to read SQL file %s: %w", fileName, err)
+	}
+	return string(bytes), nil
+}
+
+// executeSQLWithTxEmbed embed된 SQL 파일을 읽어와 트랜잭션 내에서 실행합니다.
+func executeSQLWithTxEmbed(ctx context.Context, tx *sql.Tx, fileName string, args ...interface{}) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	// embed 파일 시스템에서 "queries/" 하위의 fileName 파일을 읽어옵니다.
+	// (embeddedSQLFiles 포함된 경로는 컴파일 시점의 상대 경로에 따라 달라집니다.)
+	content, err := sqlFiles.ReadFile("queries/" + fileName)
+	if err != nil {
+		return fmt.Errorf("SQL 파일 읽기 실패 (%s): %w", fileName, err)
+	}
+
+	query := strings.TrimSpace(string(content))
+	if query == "" {
+		return fmt.Errorf("SQL 파일 (%s)이 비어 있습니다", fileName)
+	}
+
+	_, err = tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("SQL 실행 실패 (%s): %w", fileName, err)
+	}
+
+	return nil
+}
+
+// executeSQLTxEmbed 컨텍스트 없이 embed SQL 실행 시 사용할 수 있습니다.
+func executeSQLTxEmbed(tx *sql.Tx, fileName string, args ...interface{}) error {
+	return executeSQLWithTxEmbed(context.Background(), tx, fileName, args...)
+}
+
+// executeSQLWithDBEmbed embed된 SQL 파일을 읽어 DB에서 실행합니다.
+func executeSQLWithDBEmbed(ctx context.Context, db *sql.DB, fileName string, args ...interface{}) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	content, err := sqlFiles.ReadFile("queries/" + fileName)
+	if err != nil {
+		return fmt.Errorf("SQL 파일 읽기 실패 (%s): %w", fileName, err)
+	}
+
+	query := strings.TrimSpace(string(content))
+	if query == "" {
+		return fmt.Errorf("SQL 파일 (%s)이 비어 있습니다", fileName)
+	}
+
+	_, err = db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("SQL 실행 실패 (%s): %w", fileName, err)
+	}
+
+	return nil
+}
+
+// executeSQLDBEmbed 컨텍스트 없이 embed된 SQL 파일을 DB에서 실행할 때 사용합니다.
+func executeSQLDBEmbed(db *sql.DB, fileName string, args ...interface{}) error {
+	return executeSQLWithDBEmbed(context.Background(), db, fileName, args...)
+}
+
+// FirstCheckEmbed embed 방식으로 SQL 파일을 읽어와 폴더 및 파일 정보를 DB에 삽입하는 함수입니다.
+func FirstCheckEmbed(ctx context.Context, db *sql.DB, folderPath string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	if utils.IsEmptyString(folderPath) {
+		return fmt.Errorf("폴더 경로가 비어 있습니다")
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("트랜잭션 시작 실패: %w", err)
+	}
+
+	folder := Folder{
+		Path:        folderPath,
+		TotalSize:   0,
+		FileCount:   0,
+		CreatedTime: time.Now().Format("2006-01-02 15:04:05"),
+	}
+
+	// embed SQL 파일 (insert_folder.sql)을 사용합니다.
+	err = executeSQLWithTxEmbed(ctx, tx, "insert_folder.sql", folder.Path, folder.TotalSize, folder.FileCount, folder.CreatedTime)
+	if err != nil {
+		tx.Rollback()
+		return fmt.Errorf("폴더 삽입 실패: %w", err)
+	}
+
+	var folderID int64
+	err = tx.QueryRowContext(ctx, "SELECT id FROM folders WHERE path = ?", folder.Path).Scan(&folderID)
+	if err != nil {
+		tx.Rollback()
+		return fmt.Errorf("폴더 ID 조회 실패: %w", err)
+	}
+
+	filesInfo, err := GetFilesWithSize(folderPath)
+	if err != nil {
+		tx.Rollback()
+		return fmt.Errorf("폴더 내 파일 정보 가져오기 실패: %w", err)
+	}
+
+	for name, size := range filesInfo {
+		err = executeSQLWithTxEmbed(ctx, tx, "insert_file.sql", folderID, name, size, time.Now().Format("2006-01-02 15:04:05"))
+		if err != nil {
+			tx.Rollback()
+			return fmt.Errorf("파일 삽입 실패: %w", err)
+		}
+	}
+
+	err = executeSQLWithTxEmbed(ctx, tx, "update_folder.sql", folderID)
+	if err != nil {
+		tx.Rollback()
+		return fmt.Errorf("폴더 통계 업데이트 실패: %w", err)
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return fmt.Errorf("트랜잭션 커밋 실패: %w", err)
+	}
+
+	return nil
+}
+
+// InitializeDatabaseEmbed embed된 SQL 파일(init.sql)을 사용하여 데이터베이스를 초기화합니다.
+func InitializeDatabaseEmbed(db *sql.DB) error {
+	if !isDBInitialized(db) {
+		log.Println("Running database initialization (embed)...")
+		if err := executeSQLDBEmbed(db, "init.sql"); err != nil {
+			return fmt.Errorf("DB 초기화 실패: %w", err)
+		}
+		log.Println("Database initialization completed successfully (embed).")
 	} else {
 		log.Println("Database already initialized. Skipping init.sql execution.")
 	}
