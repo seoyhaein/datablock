@@ -30,20 +30,20 @@ func TestFirstCheck(t *testing.T) {
 
 	// 테이블 생성 (folders, files)
 	schema := []string{
-		`CREATE TABLE folders (
+		`CREATE TABLE IF NOT EXISTS folders (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			path TEXT NOT NULL,
-			total_size INTEGER,
-			file_count INTEGER,
-			created_time TEXT
+			path TEXT NOT NULL UNIQUE,
+			total_size INTEGER DEFAULT 0,
+			file_count INTEGER DEFAULT 0,
+			created_time DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
 		);`,
-		`CREATE TABLE files (
+		`CREATE TABLE IF NOT EXISTS files (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			folder_id INTEGER,
-			name TEXT,
-			size INTEGER,
-			created_time TEXT,
-			FOREIGN KEY(folder_id) REFERENCES folders(id)
+			folder_id INTEGER NOT NULL,
+			name TEXT NOT NULL,
+			size INTEGER NOT NULL,
+			created_time DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+			FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE CASCADE
 		);`,
 	}
 	for _, q := range schema {
@@ -52,9 +52,9 @@ func TestFirstCheck(t *testing.T) {
 		}
 	}
 
-	// FirstCheck 함수 실행
-	if err := FirstCheck(ctx, db, tempDir); err != nil {
-		t.Fatalf("FirstCheck 실행 실패: %v", err)
+	// FirstCheckEmbed 함수 실행 (임베드된 SQL 파일을 사용하여 폴더 및 파일 정보를 DB에 삽입)
+	if err := FirstCheckEmbed(ctx, db, tempDir); err != nil {
+		t.Fatalf("FirstCheckEmbed 실행 실패: %v", err)
 	}
 
 	// 폴더 레코드 확인

@@ -25,6 +25,8 @@ func main() {
 		}
 	}()
 
+	//TODO 테스트 할때 메모리 말고 그냥 db 삭제하는 것 넣을지 고민
+
 	/*
 		// TODO 일단 주석 처리 DB 먼저 끝내고 주석 풀음.
 		config, err := c.LoadConfig("config.json")

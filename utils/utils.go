@@ -13,6 +13,9 @@ import (
 	"time"
 )
 
+//go:embed queries/*.sql
+var sqlFiles embed.FS
+
 func MakeTestFiles(path string) {
 	// 디렉토리 생성
 	err := os.MkdirAll(path, os.ModePerm)
@@ -158,146 +161,6 @@ func GetFilesWithSize(directoryPath string) (map[string]int64, error) {
 	return filesInfo, nil
 }
 
-// executeSQLWithTx executes an SQL statement from the specified file
-func executeSQLWithTx(ctx context.Context, tx *sql.Tx, filePath string, args ...interface{}) error {
-	// If the provided context is nil, use the default background context.
-	// 방어적 프로그램(defensive programming) 관점에서 작성하는 것이 유리함. TODO 일단 생각해보자.
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	// Read the SQL file content.
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		return fmt.Errorf("SQL 파일 읽기 실패 (%s): %w", filePath, err)
-	}
-
-	// Trim any unnecessary whitespace from the SQL query.
-	query := strings.TrimSpace(string(content))
-	if query == "" {
-		return fmt.Errorf("SQL 파일 (%s)이 비어 있습니다", filePath)
-	}
-
-	// Execute the SQL query within the transaction using ExecContext.
-	_, err = tx.ExecContext(ctx, query, args...)
-	if err != nil {
-		return fmt.Errorf("SQL 실행 실패 (%s): %w", filePath, err)
-	}
-
-	return nil
-}
-
-// executeSQLTx 컨텍스트 없이 호출할 때 사용
-func executeSQLTx(tx *sql.Tx, filePath string, args ...interface{}) error {
-	return executeSQLWithTx(context.Background(), tx, filePath, args...)
-}
-
-func executeSQLWithDB(ctx context.Context, db *sql.DB, filePath string, args ...interface{}) error {
-	// If the provided context is nil, use the default background context.
-	// 방어적 프로그램(defensive programming) 관점에서 작성하는 것이 유리함.
-	// 예전에 nil 이면 그냥 에러 처리했는데. 이렇게 하는게 더 좋은듯. TODO 일단 생각해보자.
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	// Read the SQL file content.
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to read SQL file (%s): %w", filePath, err)
-	}
-
-	// Trim whitespace and check if the file is empty.
-	query := strings.TrimSpace(string(content))
-	if query == "" {
-		return fmt.Errorf("SQL file (%s) is empty", filePath)
-	}
-
-	// Execute the SQL statement using ExecContext.
-	_, err = db.ExecContext(ctx, query, args...)
-	if err != nil {
-		return fmt.Errorf("failed to execute SQL statement from file (%s): %w", filePath, err)
-	}
-
-	return nil
-}
-
-func executeSQLDB(db *sql.DB, filePath string, args ...interface{}) error {
-	return executeSQLWithDB(context.Background(), db, filePath, args...)
-}
-
-// TODO 여기서 생각할 것이 루트 폴더를 기준으로 그 밑의 1차적인 하위 폴더만의 리스트를 먼저 가지고 있어야 한다. 그래서 아래의 메서드들을 이용해서 db 를 채워야 한다.
-
-// FirstCheck 한번만 실행되고 말것. folderPath 검증 해야함. TODO 디렉토리 검증되는지 확인해야 함.
-func FirstCheck(ctx context.Context, db *sql.DB, folderPath string) error {
-
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	if utils.IsEmptyString(folderPath) {
-		return fmt.Errorf("폴더 경로가 비어 있습니다")
-	}
-
-	// 1. 트랜잭션 시작 (Context-aware)
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("트랜잭션 시작 실패: %w", err)
-	}
-
-	// 2. 폴더 정보 삽입 (Context-aware executeSQLTx 사용)
-	folder := Folder{
-		Path:        folderPath,
-		TotalSize:   0,
-		FileCount:   0,
-		CreatedTime: time.Now().Format("2006-01-02 15:04:05"),
-	}
-
-	err = executeSQLWithTx(ctx, tx, "queries/insert_folder.sql", folder.Path, folder.TotalSize, folder.FileCount, folder.CreatedTime)
-	if err != nil {
-		tx.Rollback()
-		return fmt.Errorf("폴더 삽입 실패: %w", err)
-	}
-
-	// 3. 폴더 ID 가져오기 (Context-aware QueryRow)
-	var folderID int64
-	err = tx.QueryRowContext(ctx, "SELECT id FROM folders WHERE path = ?", folder.Path).Scan(&folderID)
-	if err != nil {
-		tx.Rollback()
-		return fmt.Errorf("폴더 ID 조회 실패: %w", err)
-	}
-
-	// 4. 폴더 내 파일 목록 가져오기 (여기서는 Context 사용이 필요하지 않을 수도 있음)
-	filesInfo, err := GetFilesWithSize(folderPath)
-	if err != nil {
-		tx.Rollback()
-		return fmt.Errorf("폴더 내 파일 정보 가져오기 실패: %w", err)
-	}
-
-	// 5. 파일 정보를 DB에 삽입 (Context-aware executeSQLTx 사용)
-	for name, size := range filesInfo {
-		err = executeSQLWithTx(ctx, tx, "queries/insert_file.sql", folderID, name, size, time.Now().Format("2006-01-02 15:04:05"))
-		if err != nil {
-			tx.Rollback()
-			return fmt.Errorf("파일 삽입 실패: %w", err)
-		}
-	}
-
-	// 6. 폴더의 total_size 및 file_count 업데이트 (Context-aware)
-	err = executeSQLWithTx(ctx, tx, "queries/update_folder.sql", folderID)
-	if err != nil {
-		tx.Rollback()
-		return fmt.Errorf("폴더 통계 업데이트 실패: %w", err)
-	}
-
-	// 7. 트랜잭션 커밋
-	err = tx.Commit()
-	if err != nil {
-		return fmt.Errorf("트랜잭션 커밋 실패: %w", err)
-	}
-
-	return nil
-}
-
 func isDBInitialized(db *sql.DB) bool {
 	var count int
 	err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('folders', 'files')").Scan(&count)
@@ -308,33 +171,7 @@ func isDBInitialized(db *sql.DB) bool {
 	return count == 2 // folders, files 두 테이블이 모두 있어야 true 반환
 }
 
-func InitializeDatabase(db *sql.DB) error {
-	// 데이터베이스가 초기화되지 않았다면 init.sql 실행
-	if !isDBInitialized(db) {
-		log.Println("Running database initialization...")
-		if err := executeSQLDB(db, "queries/init.sql"); err != nil {
-			return fmt.Errorf("DB 초기화 실패: %w", err)
-		}
-		log.Println("Database initialization completed successfully.")
-	} else {
-		log.Println("Database already initialized. Skipping init.sql execution.")
-	}
-	return nil
-}
-
 // TODO 테스트 필요.
-// ----------------------------------------------------------------------------
-// 아래부터는 embed 방식으로 SQL 파일을 읽어오는 새로운 함수들입니다.
-// 기존 함수들은 그대로 남겨두고, 파일 경로 대신 SQL 파일명을 전달하여 embed된 파일에서 내용을 읽어옵니다.
-
-// embed 패키지를 사용하여 쿼리 파일들을 포함합니다.
-// 이 예제에서는 utils 패키지 파일 기준 상위 폴더의 queries 폴더 내의 모든 .sql 파일을 포함합니다.
-//
-// 주의: 실제 프로젝트 디렉토리 구조에 맞게 경로를 조정해야 합니다.
-// 예: utils 폴더 안에 있을 경우 "../queries/*.sql" 처럼.
-
-//go:embed ../queries/*.sql
-var sqlFiles embed.FS
 
 // getSQLQuery  파일명을 입력받아 해당 SQL 파일의 내용 반환
 func getSQLQuery(fileName string) (string, error) {
@@ -346,14 +183,14 @@ func getSQLQuery(fileName string) (string, error) {
 	return string(bytes), nil
 }
 
-// executeSQLWithTxEmbed embed된 SQL 파일을 읽어와 트랜잭션 내에서 실행합니다.
+// executeSQLWithTxEmbed embed 된 SQL 파일을 읽어와 트랜잭션 내에서 실행
 func executeSQLWithTxEmbed(ctx context.Context, tx *sql.Tx, fileName string, args ...interface{}) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	// embed 파일 시스템에서 "queries/" 하위의 fileName 파일을 읽어옵니다.
-	// (embeddedSQLFiles 포함된 경로는 컴파일 시점의 상대 경로에 따라 달라집니다.)
+	// embed 파일 시스템에서 "queries/" 하위의 fileName 파일을 읽어옴.
+	// (embeddedSQLFiles 포함된 경로는 컴파일 시점의 상대 경로에 따라 달라짐.)
 	content, err := sqlFiles.ReadFile("queries/" + fileName)
 	if err != nil {
 		return fmt.Errorf("SQL 파일 읽기 실패 (%s): %w", fileName, err)
@@ -406,7 +243,7 @@ func executeSQLDBEmbed(db *sql.DB, fileName string, args ...interface{}) error {
 	return executeSQLWithDBEmbed(context.Background(), db, fileName, args...)
 }
 
-// FirstCheckEmbed embed 방식으로 SQL 파일을 읽어와 폴더 및 파일 정보를 DB에 삽입하는 함수입니다.
+// FirstCheckEmbed embed 방식으로 SQL 파일을 읽어와 폴더 및 파일 정보를 DB에 삽입
 func FirstCheckEmbed(ctx context.Context, db *sql.DB, folderPath string) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -428,7 +265,7 @@ func FirstCheckEmbed(ctx context.Context, db *sql.DB, folderPath string) error {
 		CreatedTime: time.Now().Format("2006-01-02 15:04:05"),
 	}
 
-	// embed SQL 파일 (insert_folder.sql)을 사용합니다.
+	// embed SQL 파일 (insert_folder.sql)을 사용
 	err = executeSQLWithTxEmbed(ctx, tx, "insert_folder.sql", folder.Path, folder.TotalSize, folder.FileCount, folder.CreatedTime)
 	if err != nil {
 		tx.Rollback()
@@ -456,7 +293,7 @@ func FirstCheckEmbed(ctx context.Context, db *sql.DB, folderPath string) error {
 		}
 	}
 
-	err = executeSQLWithTxEmbed(ctx, tx, "update_folder.sql", folderID)
+	err = executeSQLWithTxEmbed(ctx, tx, "update_folders.sql", folderID)
 	if err != nil {
 		tx.Rollback()
 		return fmt.Errorf("폴더 통계 업데이트 실패: %w", err)
@@ -470,8 +307,8 @@ func FirstCheckEmbed(ctx context.Context, db *sql.DB, folderPath string) error {
 	return nil
 }
 
-// InitializeDatabaseEmbed embed된 SQL 파일(init.sql)을 사용하여 데이터베이스를 초기화합니다.
-func InitializeDatabaseEmbed(db *sql.DB) error {
+// InitializeDatabase embed 된  SQL 파일(init.sql)을 사용하여 데이터베이스를 초기화
+func InitializeDatabase(db *sql.DB) error {
 	if !isDBInitialized(db) {
 		log.Println("Running database initialization (embed)...")
 		if err := executeSQLDBEmbed(db, "init.sql"); err != nil {
