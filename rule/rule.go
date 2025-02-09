@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	u "github.com/seoyhaein/utils"
 	"log"
 	"os"
 	"path/filepath"
@@ -35,11 +36,14 @@ type SizeRules struct {
 	MaxSize int `json:"maxSize"`
 }
 
+// TODO 생각하기 내부에서만 써야할 거 같은데 생각해보자.
+
 // LoadRuleSetFromFile JSON 파일을 읽어 RuleSet 구조체로 디코딩. RuleSet 의 경우 값의 수정이 일어나면 안되기때문에 값으로 리턴한다.
 func LoadRuleSetFromFile(filePath string) (RuleSet, error) {
-	if filePath == "" {
+	if u.IsEmptyString(filePath) {
 		return RuleSet{}, fmt.Errorf("file path cannot be empty")
 	}
+
 	// path 에 대한 정규화
 	filePath = filepath.Clean(filePath)
 	// filePath가 디렉토리인지 확인
@@ -81,6 +85,8 @@ func extractParts(fileName string, delimiters []string) []string {
 	}
 	return strings.Fields(fileName)
 }
+
+// TODO 생각하기 내부에서만 써야할 거 같은데 생각해보자.
 
 // BlockifyFilesToMap 파일 이름을 JSON 규칙에 따라 블록화하여 맵으로 변환
 func BlockifyFilesToMap(fileNames []string, ruleSet RuleSet) (map[int]map[string]string, error) {
@@ -191,6 +197,8 @@ func WriteInvalidFiles(invalidRows []map[string]string, outputFilePath string) (
 	return err
 }
 
+// TODO 생각하기 내부에서만 써야할 거 같은데 생각해보자.
+
 // ValidateRuleSet validates the given rule set for conflicts and unused parts.
 func ValidateRuleSet(ruleSet RuleSet) bool {
 	hasConflict := false
@@ -299,56 +307,10 @@ func SaveResultMapToCSV(filePath string, resultMap map[int]map[string]string, he
 	return err
 }
 
-// ApplyRule 적용된 규칙에 따라 파일을 처리 // TODO 추가적으로 예외 파일을 넣을 수 있도록 옵션으로 넣어 둔다.
-// 해당 디렉토리에 rule.json, invalid_files, fileblock.csv 반드시 존재해아 하는데 이거 검사하는 메서드 있나??
-// TODO path 나 디렉토리 관련 정규화 적용할 것. 여기서 정규화 하고 다른 메서드들은 반복되지 않도록 처리한다.
-func ApplyRule(filePath string) error {
+// GenerateMap 일단 이름 고침.
+func GenerateMap(filePath string) (map[int]map[string]string, error) {
 	// Load the rule set
-	ruleSet, err := LoadRuleSetFromFile(filePath)
-	if err != nil {
-		return fmt.Errorf("failed to load rule set: %w", err)
-	}
-
-	// Validate the rule set
-	if !ValidateRuleSet(ruleSet) {
-		return fmt.Errorf("rule set has conflicts or unused parts")
-	}
-
-	// Read all file names from the directory
-	// 예외 규정: rule.json, invalid_files로 시작하는 파일, fileblock.csv
-	exclusions := []string{"rule.json", "invalid_files", "fileblock.csv"}
-	files, err := ReadAllFileNames(filePath, exclusions)
-
-	if err != nil {
-		return fmt.Errorf("failed to read file names: %w", err)
-	}
-
-	// Blockify files using the rule set
-	resultMap, err := BlockifyFilesToMap(files, ruleSet)
-	if err != nil {
-		return fmt.Errorf("failed to blockify files: %w", err)
-	}
-
-	// Filter the result map into valid and invalid rows
-	validRows, invalidRows := FilterMap(resultMap, len(ruleSet.Header))
-
-	// Save valid rows to a CSV file
-	if err := SaveResultMapToCSV(filePath, validRows, ruleSet.Header); err != nil {
-		return fmt.Errorf("failed to save result map to CSV: %w", err)
-	}
-
-	// Save invalid rows to a separate file
-	if err := WriteInvalidFiles(invalidRows, filePath); err != nil {
-		return fmt.Errorf("failed to write invalid files: %w", err)
-	}
-
-	return nil
-}
-
-// ConnectProto 이름 막 지음.
-func ConnectProto(filePath string) (map[int]map[string]string, error) {
-	// Load the rule set
-	ruleSet, err := LoadRuleSetFromFile(filePath)
+	ruleSet, err := LoadRuleSetFromFile(filePath) // 이 메서드에서 filepath 의 검증을 해줌.
 	if err != nil {
 		return nil, fmt.Errorf("failed to load rule set: %w", err)
 	}
@@ -388,6 +350,8 @@ func ConnectProto(filePath string) (map[int]map[string]string, error) {
 
 	return validRows, nil
 }
+
+// TODO 생각하기 내부에서만 써야할 거 같은데 생각해보자.
 
 // ReadAllFileNames 디렉토리에서 파일을 읽되 예외 규정에 맞는 파일들은 제외 TODO path 나 디렉토리 관련 정규화 적용할 것.
 func ReadAllFileNames(dirPath string, exclusions []string) ([]string, error) {

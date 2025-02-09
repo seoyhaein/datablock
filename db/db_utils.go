@@ -1,11 +1,11 @@
-package utils
+package db
 
 import (
 	"context"
 	"database/sql"
 	"embed"
 	"fmt"
-	utils "github.com/seoyhaein/utils"
+	u "github.com/seoyhaein/utils"
 	"log"
 	"os"
 	"path/filepath"
@@ -249,7 +249,7 @@ func FirstCheckEmbed(ctx context.Context, db *sql.DB, folderPath string) error {
 		ctx = context.Background()
 	}
 
-	if utils.IsEmptyString(folderPath) {
+	if u.IsEmptyString(folderPath) {
 		return fmt.Errorf("폴더 경로가 비어 있습니다")
 	}
 
@@ -319,4 +319,11 @@ func InitializeDatabase(db *sql.DB) error {
 		log.Println("Database already initialized. Skipping init.sql execution.")
 	}
 	return nil
+}
+
+// for test
+func clearDatabase(db *sql.DB) error {
+	// 외래 키 제약 조건이 ON DELETE CASCADE로 설정되어 있다면, folders 테이블에서 데이터를 삭제하면 files 테이블의 데이터도 자동 삭제.
+	_, err := db.Exec("DELETE FROM folders;")
+	return err
 }
