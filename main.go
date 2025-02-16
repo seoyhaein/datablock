@@ -6,7 +6,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	c "github.com/seoyhaein/datablock/config"
 	u "github.com/seoyhaein/datablock/db"
-	"log"
 	"os"
 )
 
@@ -23,7 +22,7 @@ func main() {
 	}
 	defer func() {
 		if err := db.Close(); err != nil {
-			log.Fatal("failed to close db:", err)
+			//log.Fatal("failed to close db:", err)
 			os.Exit(1) // defer 내부에서도 os.Exit 사용 가능
 		}
 	}()

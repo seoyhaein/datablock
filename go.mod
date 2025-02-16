@@ -3,9 +3,8 @@ module github.com/seoyhaein/datablock
 go 1.22
 
 require (
-	github.com/fsnotify/fsnotify v1.8.0
 	github.com/mattn/go-sqlite3 v1.14.24
-	github.com/seoyhaein/utils v0.0.4
+	github.com/seoyhaein/utils v0.0.5
 	google.golang.org/protobuf v1.35.2
 )
 

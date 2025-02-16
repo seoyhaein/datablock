@@ -16,7 +16,12 @@ func LoadConfig(filename string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
-	defer file.Close()
+
+	defer func() {
+		if cErr := file.Close(); cErr != nil {
+			err = fmt.Errorf("failed to close file: %w", cErr)
+		}
+	}()
 
 	decoder := json.NewDecoder(file)
 	var config Config

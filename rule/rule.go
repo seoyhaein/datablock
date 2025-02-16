@@ -36,17 +36,14 @@ type SizeRules struct {
 	MaxSize int `json:"maxSize"`
 }
 
-// TODO 생각하기 내부에서만 써야할 거 같은데 생각해보자.
-
 // LoadRuleSetFromFile JSON 파일을 읽어 RuleSet 구조체로 디코딩. RuleSet 의 경우 값의 수정이 일어나면 안되기때문에 값으로 리턴한다.
 func LoadRuleSetFromFile(filePath string) (RuleSet, error) {
-	if u.IsEmptyString(filePath) {
-		return RuleSet{}, fmt.Errorf("file path cannot be empty")
+	filePath, err := u.CheckPath(filePath)
+	if err != nil {
+		return RuleSet{}, err
 	}
 
-	// path 에 대한 정규화
-	filePath = filepath.Clean(filePath)
-	// filePath가 디렉토리인지 확인
+	// filePath 가 디렉토리인지 확인
 	fileInfo, err := os.Stat(filePath)
 	if err != nil {
 		return RuleSet{}, fmt.Errorf("failed to access path: %w", err)
@@ -78,7 +75,7 @@ func LoadRuleSetFromFile(filePath string) (RuleSet, error) {
 	return ruleSet, nil
 }
 
-// Helper function: 파일 이름을 JSON 규칙의 delimiter를 기준으로 파트로 나누기
+// Helper function: 파일 이름을 JSON 규칙의 delimiter 를 기준으로 파트로 나누기
 func extractParts(fileName string, delimiters []string) []string {
 	for _, delim := range delimiters {
 		fileName = strings.ReplaceAll(fileName, delim, " ")
@@ -86,16 +83,14 @@ func extractParts(fileName string, delimiters []string) []string {
 	return strings.Fields(fileName)
 }
 
-// TODO 생각하기 내부에서만 써야할 거 같은데 생각해보자.
-
-// BlockifyFilesToMap 파일 이름을 JSON 규칙에 따라 블록화하여 맵으로 변환
-func BlockifyFilesToMap(fileNames []string, ruleSet RuleSet) (map[int]map[string]string, error) {
+// FilesToMap 파일 이름을 JSON 규칙에 따라 블록화하여 맵으로 변환
+func FilesToMap(fileNames []string, ruleSet RuleSet) (map[int]map[string]string, error) {
 	rowMap := make(map[string]int)               // Row Key → Row Index
 	rowCounter := 0                              // 행 인덱스 카운터 (0부터 시작)
 	resultMap := make(map[int]map[string]string) // 결과 데이터 저장용 맵
 
 	for _, fileName := range fileNames {
-		// 파일명을 JSON 규칙의 delimiter를 기준으로 분리
+		// 파일명을 JSON 규칙의 delimiter 를 기준으로 분리
 		parts := extractParts(fileName, ruleSet.Delimiter)
 
 		// Row Key 생성
@@ -123,7 +118,7 @@ func BlockifyFilesToMap(fileNames []string, ruleSet RuleSet) (map[int]map[string
 		}
 		colKey := strings.Join(colKeyParts, "_")
 
-		// Row에 Column Key와 파일명 추가
+		// Row 에 Column Key 와 파일명 추가
 		rowIdx := rowMap[rowKey]
 		resultMap[rowIdx][colKey] = fileName
 	}
@@ -149,14 +144,14 @@ func FilterMap(resultMap map[int]map[string]string, expectedColCount int) (map[i
 	return validRows, invalidRows
 }
 
-// WriteInvalidFiles invalidRows의 파일명을 하나의 텍스트 파일에 기록 TODO readonly 로 하는 것 생각
+// WriteInvalidFiles invalidRows 의 파일명을 하나의 텍스트 파일에 기록 TODO readonly 로 하는 것 생각
 func WriteInvalidFiles(invalidRows []map[string]string, outputFilePath string) (err error) {
-	// invalidRows가 비어있으면 파일을 생성하지 않고 리턴
+	// invalidRows 가 비어있으면 파일을 생성하지 않고 리턴
 	if len(invalidRows) == 0 {
 		return nil
 	}
 
-	// outputFilePath가 디렉토리인지 확인
+	// outputFilePath 가 디렉토리인지 확인
 	fileInfo, err := os.Stat(outputFilePath)
 	if err != nil {
 		return fmt.Errorf("failed to access path %s: %w", outputFilePath, err)
@@ -175,11 +170,11 @@ func WriteInvalidFiles(invalidRows []map[string]string, outputFilePath string) (
 	}
 
 	defer func() {
-		if cerr := file.Close(); cerr != nil {
+		if cErr := file.Close(); cErr != nil {
 			if err == nil {
-				err = fmt.Errorf("failed to close file: %w", cerr)
+				err = fmt.Errorf("failed to close file: %w", cErr)
 			} else {
-				err = fmt.Errorf("%v; failed to close file: %w", err, cerr)
+				err = fmt.Errorf("%v; failed to close file: %w", err, cErr)
 			}
 		}
 	}()
@@ -196,8 +191,6 @@ func WriteInvalidFiles(invalidRows []map[string]string, outputFilePath string) (
 
 	return err
 }
-
-// TODO 생각하기 내부에서만 써야할 거 같은데 생각해보자.
 
 // ValidateRuleSet validates the given rule set for conflicts and unused parts.
 func ValidateRuleSet(ruleSet RuleSet) bool {
@@ -229,11 +222,10 @@ func ValidateRuleSet(ruleSet RuleSet) bool {
 
 // SaveResultMapToCSV map[int]map[string]string 데이터를 CSV 파일로 저장, TODO 파일 생성날짜를 기록할지 생각, readonly 로 하는 것 생각.
 func SaveResultMapToCSV(filePath string, resultMap map[int]map[string]string, headers []string) (err error) {
-	if filePath == "" {
-		return fmt.Errorf("file path cannot be empty")
+	filePath, err = u.CheckPath(filePath)
+	if err != nil {
+		return err
 	}
-	// path 에 대한 정규화
-	filePath = filepath.Clean(filePath)
 
 	// filePath 가 디렉토리인지 확인
 	fileInfo, err := os.Stat(filePath)
@@ -253,11 +245,11 @@ func SaveResultMapToCSV(filePath string, resultMap map[int]map[string]string, he
 
 	//defer file.Close()
 	defer func() {
-		if cerr := file.Close(); cerr != nil {
+		if cErr := file.Close(); cErr != nil {
 			if err == nil {
-				err = fmt.Errorf("failed to close file: %w", cerr)
+				err = fmt.Errorf("failed to close file: %w", cErr)
 			} else {
-				err = fmt.Errorf("%v; failed to close file: %w", err, cerr)
+				err = fmt.Errorf("%v; failed to close file: %w", err, cErr)
 			}
 		}
 	}()
@@ -287,7 +279,7 @@ func SaveResultMapToCSV(filePath string, resultMap map[int]map[string]string, he
 	// 열 키를 정렬
 	sort.Strings(columnHeaders)
 
-	// 각 행 데이터를 CSV에 추가
+	// 각 행 데이터를 CSV 에 추가
 	for rowIdx := 0; rowIdx < len(resultMap); rowIdx++ {
 		rowData := append([]string{fmt.Sprintf("Row%d", rowIdx)}, make([]string, len(columnHeaders))...)
 
@@ -321,7 +313,7 @@ func GenerateMap(filePath string) (map[int]map[string]string, error) {
 	}
 
 	// Read all file names from the directory
-	// 예외 규정: rule.json, invalid_files로 시작하는 파일, fileblock.csv
+	// 예외 규정: rule.json, invalid_files 로 시작하는 파일, fileblock.csv
 	exclusions := []string{"rule.json", "invalid_files", "fileblock.csv"}
 	files, err := ReadAllFileNames(filePath, exclusions)
 
@@ -329,8 +321,7 @@ func GenerateMap(filePath string) (map[int]map[string]string, error) {
 		return nil, fmt.Errorf("failed to read file names: %w", err)
 	}
 
-	// Blockify files using the rule set
-	resultMap, err := BlockifyFilesToMap(files, ruleSet)
+	resultMap, err := FilesToMap(files, ruleSet)
 	if err != nil {
 		return nil, fmt.Errorf("failed to blockify files: %w", err)
 	}
