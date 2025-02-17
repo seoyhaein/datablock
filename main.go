@@ -38,7 +38,7 @@ func main() {
 	u.MakeTestFiles(path)
 
 	ctx := context.Background()
-	err = u.FirstCheckEmbed(ctx, db, path)
+	err = u.FirstCheck(ctx, db, path)
 	if err != nil {
 		fmt.Println("FirstCheckEmbed Error")
 	}

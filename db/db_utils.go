@@ -127,7 +127,7 @@ type Folder struct {
 	CreatedTime string `db:"created_time"` // sting 으로 해도 충분
 }
 
-// GetFilesWithSize 특정 폴더에서 파일 이름과 해당 파일 크기를 가져오는 함수 TODO : 여기서 특정 파일은 제외할 필요가 있음.
+// GetFilesWithSize 특정 폴더에서 파일 이름과 해당 파일 크기를 가져오는 함수, 삭제 예정.
 func GetFilesWithSize(directoryPath string) (map[string]int64, error) {
 	filesInfo := make(map[string]int64)
 
@@ -170,14 +170,14 @@ func isDBInitialized(db *sql.DB) bool {
 	return count == 2 // folders, files 두 테이블이 모두 있어야 true 반환
 }
 
-// executeSQLWithTxEmbed embed 된 SQL 파일을 읽어와 트랜잭션 내에서 실행
-func executeSQLWithTxEmbed(ctx context.Context, tx *sql.Tx, fileName string, args ...interface{}) error {
+// execSQLTx 읽어온 SQL 파일을 트랜잭션 내에서 ExecContext 로 실행.
+// IMPORTANT: 비 SELECT 쿼리에 사용. (결과 리턴 없음)
+func execSQLTx(ctx context.Context, tx *sql.Tx, fileName string, args ...interface{}) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	// embed 파일 시스템에서 "queries/" 하위의 fileName 파일을 읽어옴.
-	// (embeddedSQLFiles 포함된 경로는 컴파일 시점의 상대 경로에 따라 달라짐.)
+	// "queries/" 하위의 SQL 파일을 읽어옴.
 	content, err := sqlFiles.ReadFile("queries/" + fileName)
 	if err != nil {
 		return fmt.Errorf("failed to read SQL file (%s): %w", fileName, err)
@@ -196,17 +196,19 @@ func executeSQLWithTxEmbed(ctx context.Context, tx *sql.Tx, fileName string, arg
 	return nil
 }
 
-// executeSQLTxEmbed 컨텍스트 없이 embed SQL 실행 시 사용할 수 있습니다.
-func executeSQLTxEmbed(tx *sql.Tx, fileName string, args ...interface{}) error {
-	return executeSQLWithTxEmbed(context.Background(), tx, fileName, args...)
+// execSQLTxNoCtx 컨텍스트 없이 트랜잭션 내에서 SQL 파일을 실행.
+func execSQLTxNoCtx(tx *sql.Tx, fileName string, args ...interface{}) error {
+	return execSQLTx(context.Background(), tx, fileName, args...)
 }
 
-// executeSQLWithDBEmbed embed 된 SQL 파일을 읽어 DB 에서 실행.
-func executeSQLWithDBEmbed(ctx context.Context, db *sql.DB, fileName string, args ...interface{}) error {
+// execSQL 읽어온 SQL 파일을 DB 에서 ExecContext 로 실행.
+// IMPORTANT: 비 SELECT 쿼리에 사용. (결과 리턴 없음)
+func execSQL(ctx context.Context, db *sql.DB, fileName string, args ...interface{}) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
+	// "queries/" 하위의 SQL 파일을 읽어옴.
 	content, err := sqlFiles.ReadFile("queries/" + fileName)
 	if err != nil {
 		return fmt.Errorf("failed to read SQL file (%s): %w", fileName, err)
@@ -225,13 +227,43 @@ func executeSQLWithDBEmbed(ctx context.Context, db *sql.DB, fileName string, arg
 	return nil
 }
 
-// executeSQLDBEmbed 컨텍스트 없이 embed 된 SQL 파일을 DB 에서 실행할 때 사용
-func executeSQLDBEmbed(db *sql.DB, fileName string, args ...interface{}) error {
-	return executeSQLWithDBEmbed(context.Background(), db, fileName, args...)
+// execSQLNoCtx 컨텍스트 없이 DB 에서 SQL 파일을 실행.
+func execSQLNoCtx(db *sql.DB, fileName string, args ...interface{}) error {
+	return execSQL(context.Background(), db, fileName, args...)
 }
 
-// FirstCheckEmbed embed 방식으로 SQL 파일을 읽어와 폴더 및 파일 정보를 DB에 삽입
-func FirstCheckEmbed(ctx context.Context, db *sql.DB, folderPath string) error {
+// querySQL 읽어온 SQL 파일을 DB 에서 QueryContext 로 실행.
+// IMPORTANT: SELECT 쿼리에 사용. 결과로 *sql.Rows 를 반환하며, 호출자가 반드시 Close() 해야 함.
+func querySQL(ctx context.Context, db *sql.DB, fileName string, args ...interface{}) (*sql.Rows, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	// "queries/" 하위의 SQL 파일을 읽어옴.
+	content, err := sqlFiles.ReadFile("queries/" + fileName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read SQL file (%s): %w", fileName, err)
+	}
+
+	query := strings.TrimSpace(string(content))
+	if query == "" {
+		return nil, fmt.Errorf("SQL file (%s) is empty", fileName)
+	}
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("SQL query failed (%s): %w", fileName, err)
+	}
+	return rows, nil
+}
+
+// querySQLNoCtx 컨텍스트 없이 DB 에서 SELECT 쿼리를 실행.
+func querySQLNoCtx(db *sql.DB, fileName string, args ...interface{}) (*sql.Rows, error) {
+	return querySQL(context.Background(), db, fileName, args...)
+}
+
+// FirstCheck 폴더 경로를 받아 폴더 내 파일 정보를 DB에 삽입하는 함수
+func FirstCheck(ctx context.Context, db *sql.DB, folderPath string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -244,16 +276,23 @@ func FirstCheckEmbed(ctx context.Context, db *sql.DB, folderPath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to start transaction: %w", err)
 	}
+	// 폴더에서 제외 해야 할 파일들.
+	exclusions := []string{"rule.json", "invalid_files", "fileblock.csv"}
+	folderDetails, fileDetails, err := GetFolderDetails(folderPath, exclusions)
 
-	folder := Folder{
-		Path:        folderPath,
-		TotalSize:   0,
-		FileCount:   0,
-		CreatedTime: time.Now().Format("2006-01-02 15:04:05"),
+	if err != nil {
+		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+			log.Printf("rollback failed: %v", rbErr)
+		}
+		return fmt.Errorf("failed to get folder details: %w", err)
 	}
 
-	// Using embedded SQL file (insert_folder.sql)
-	err = executeSQLWithTxEmbed(ctx, tx, "insert_folder.sql", folder.Path, folder.TotalSize, folder.FileCount, folder.CreatedTime)
+	// DB에 폴더 정보 삽입 (insert_folder.sql)
+	err = execSQLTx(ctx, tx, "insert_folder.sql",
+		folderDetails.Path,
+		folderDetails.TotalSize,
+		folderDetails.FileCount,
+		folderDetails.CreatedTime)
 	if err != nil {
 		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
 			log.Printf("rollback failed: %v", rbErr)
@@ -261,8 +300,9 @@ func FirstCheckEmbed(ctx context.Context, db *sql.DB, folderPath string) error {
 		return fmt.Errorf("failed to insert folder: %w", err)
 	}
 
+	// 삽입된 폴더의 ID를 조회
 	var folderID int64
-	err = tx.QueryRowContext(ctx, "SELECT id FROM folders WHERE path = ?", folder.Path).Scan(&folderID)
+	err = tx.QueryRowContext(ctx, "SELECT id FROM folders WHERE path = ?", folderDetails.Path).Scan(&folderID)
 	if err != nil {
 		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
 			log.Printf("rollback failed: %v", rbErr)
@@ -270,16 +310,13 @@ func FirstCheckEmbed(ctx context.Context, db *sql.DB, folderPath string) error {
 		return fmt.Errorf("failed to query folder ID: %w", err)
 	}
 
-	filesInfo, err := GetFilesWithSize(folderPath)
-	if err != nil {
-		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
-			log.Printf("rollback failed: %v", rbErr)
-		}
-		return fmt.Errorf("failed to retrieve files info in folder: %w", err)
-	}
-
-	for name, size := range filesInfo {
-		err = executeSQLWithTxEmbed(ctx, tx, "insert_file.sql", folderID, name, size, time.Now().Format("2006-01-02 15:04:05"))
+	// 파일 정보 삽입 (insert_file.sql)
+	for _, file := range fileDetails {
+		err = execSQLTx(ctx, tx, "insert_file.sql",
+			folderID,
+			file.Name,
+			file.Size,
+			file.CreatedTime)
 		if err != nil {
 			if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
 				log.Printf("rollback failed: %v", rbErr)
@@ -288,7 +325,7 @@ func FirstCheckEmbed(ctx context.Context, db *sql.DB, folderPath string) error {
 		}
 	}
 
-	err = executeSQLWithTxEmbed(ctx, tx, "update_folders.sql", folderID)
+	err = execSQLTx(ctx, tx, "update_folders.sql", folderID)
 	if err != nil {
 		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
 			log.Printf("rollback failed: %v", rbErr)
@@ -296,6 +333,7 @@ func FirstCheckEmbed(ctx context.Context, db *sql.DB, folderPath string) error {
 		return fmt.Errorf("failed to update folder statistics: %w", err)
 	}
 
+	// 트랜잭션 커밋
 	err = tx.Commit()
 	if err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
@@ -308,7 +346,7 @@ func FirstCheckEmbed(ctx context.Context, db *sql.DB, folderPath string) error {
 func InitializeDatabase(db *sql.DB) error {
 	if !isDBInitialized(db) {
 		log.Println("Running DB initialization (embed)...")
-		if err := executeSQLDBEmbed(db, "init.sql"); err != nil {
+		if err := execSQLNoCtx(db, "init.sql"); err != nil {
 			return fmt.Errorf("DB initialization failed: %w", err)
 		}
 		log.Println("DB initialization completed successfully (embed).")
@@ -316,6 +354,126 @@ func InitializeDatabase(db *sql.DB) error {
 		log.Println("DB already initialized. Skipping init.sql execution.")
 	}
 	return nil
+}
+
+// GetFolderDetails 특정 디렉토리 내의 파일들을 읽어 전체 파일 개수, 총 크기와 각 파일의 메타데이터를 수집.
+// Go 1.16부터 도입된 os.ReadDir, DirEntry.Info()를 사용하여 시스템 콜을 최소화함.
+func GetFolderDetails(dirPath string, exclusions []string) (Folder, []File, error) {
+	var folder Folder
+	var files []File
+
+	// 디렉토리 내 파일 목록 읽기 (Go 1.16 이상에서는 os.ReadDir 사용)
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return folder, nil, fmt.Errorf("failed to read directory %s: %w", dirPath, err)
+	}
+
+	totalSize := int64(0)
+	fileCount := int64(0)
+
+	// 각 엔트리(파일)에 대해 처리
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue // 하위 디렉토리는 무시
+		}
+
+		fileName := entry.Name()
+		// 제외 목록에 있는 파일이면 건너뛰기
+		if u.ExcludeFiles(fileName, exclusions) {
+			continue
+		}
+
+		// 파일 전체 경로 생성
+		filePath := filepath.Join(dirPath, fileName)
+
+		// 파일 정보 가져오기 (os.ReadDir 가 반환하는 DirEntry 의 Info() 사용)
+		info, err := entry.Info()
+		if err != nil {
+			return folder, nil, fmt.Errorf("failed to get file info for %s: %w", filePath, err)
+		}
+
+		size := info.Size()
+		totalSize += size
+		fileCount++
+
+		// File 구조체 생성 (ID 및 FolderID는 DB 삽입 후 업데이트 가능)
+		// IMPORTANT sqlite 에서 AUTOINCREMENT 로 시작하도록 하였음. 따라서 0 이 들어간것은 DB 에 들어가기 전 데이터임.
+		fileRecord := File{
+			ID:          0, // 아직 DB에 저장되지 않았으므로 0 또는 추후 채움
+			FolderID:    0, // folder 삽입 후 업데이트
+			Name:        fileName,
+			Size:        size,
+			CreatedTime: info.ModTime().Format("2006-01-02 15:04:05"),
+		}
+		files = append(files, fileRecord)
+	}
+
+	// IMPORTANT Folder 구조체 생성 (ID는 DB 삽입 후 업데이트)
+	folder = Folder{
+		ID:          0,
+		Path:        dirPath,
+		TotalSize:   totalSize,
+		FileCount:   fileCount,
+		CreatedTime: time.Now().Format("2006-01-02 15:04:05"),
+	}
+
+	return folder, files, nil
+}
+
+// GetFoldersFromDB DB의 폴더 정보를 조회하여 Folder 구조체 슬라이스로 반환함.
+// IMPORTANT: 호출자가 반환된 rows를 직접 Close() 할 필요는 없음. 내부에서 모두 처리됨.
+func GetFoldersFromDB(db *sql.DB) ([]Folder, error) {
+	// "select_folders.sql" 파일에 정의된 SELECT 쿼리를 실행하여 폴더 정보를 조회
+	rows, err := querySQLNoCtx(db, "select_folders.sql")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query folders: %w", err)
+	}
+	defer rows.Close()
+
+	var folders []Folder
+	// 각 행을 순회하면서 Folder 구조체에 스캔
+	for rows.Next() {
+		var f Folder
+		err = rows.Scan(&f.ID, &f.Path, &f.TotalSize, &f.FileCount, &f.CreatedTime)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan folder: %w", err)
+		}
+		folders = append(folders, f)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+
+	return folders, nil
+}
+
+// GetFilesInfoFromDB DB의 파일 정보를 조회하여 File 구조체 슬라이스로 반환함.
+// IMPORTANT: 호출자가 반환된 rows를 직접 Close() 할 필요는 없음. 내부에서 모두 처리됨.
+func GetFilesInfoFromDB(db *sql.DB) ([]File, error) {
+	// "select_files.sql" 파일에 정의된 SELECT 쿼리를 실행하여 파일 정보를 조회
+	rows, err := querySQLNoCtx(db, "select_files.sql")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query files: %w", err)
+	}
+	defer rows.Close()
+
+	var files []File
+	// 각 행을 순회하면서 File 구조체에 스캔
+	for rows.Next() {
+		var f File
+		err = rows.Scan(&f.ID, &f.FolderID, &f.Name, &f.Size, &f.CreatedTime)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan file: %w", err)
+		}
+		files = append(files, f)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+
+	return files, nil
 }
 
 // for test

@@ -342,8 +342,6 @@ func GenerateMap(filePath string) (map[int]map[string]string, error) {
 	return validRows, nil
 }
 
-// TODO 생각하기 내부에서만 써야할 거 같은데 생각해보자.
-
 // ReadAllFileNames 디렉토리에서 파일을 읽되 예외 규정에 맞는 파일들은 제외 TODO path 나 디렉토리 관련 정규화 적용할 것.
 func ReadAllFileNames(dirPath string, exclusions []string) ([]string, error) {
 	// 디렉토리의 파일 목록 읽기
@@ -360,7 +358,7 @@ func ReadAllFileNames(dirPath string, exclusions []string) ([]string, error) {
 		fileName := file.Name()
 
 		// 예외 규정에 있는 파일이면 건너뛰기
-		if excludeFiles(fileName, exclusions) {
+		if u.ExcludeFiles(fileName, exclusions) {
 			continue
 		}
 
@@ -369,14 +367,4 @@ func ReadAllFileNames(dirPath string, exclusions []string) ([]string, error) {
 	}
 
 	return fileNames, nil
-}
-
-// excludeFiles 파일이 예외 규정에 포함되는지 확인
-func excludeFiles(fileName string, exclusions []string) bool {
-	for _, exclusion := range exclusions {
-		if strings.HasPrefix(fileName, exclusion) {
-			return true
-		}
-	}
-	return false
 }

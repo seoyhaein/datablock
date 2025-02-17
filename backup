@@ -1573,4 +1573,78 @@ func main() {
 	log.Println("Watch service stopped gracefully.")
 }
 
+// FirstCheck_Old SQL 파일을 읽어와 폴더 및 파일 정보를 DB에 삽입. TODO 한번 만 실행되어야 함.
+func FirstCheck_Old(ctx context.Context, db *sql.DB, folderPath string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	if u.IsEmptyString(folderPath) {
+		return fmt.Errorf("folder path is empty")
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to start transaction: %w", err)
+	}
+
+	folder := Folder{
+		Path:        folderPath,
+		TotalSize:   0,
+		FileCount:   0,
+		CreatedTime: time.Now().Format("2006-01-02 15:04:05"),
+	}
+
+	// Using embedded SQL file (insert_folder.sql)
+	err = executeSQLWithTxEmbed(ctx, tx, "insert_folder.sql", folder.Path, folder.TotalSize, folder.FileCount, folder.CreatedTime)
+	if err != nil {
+		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+			log.Printf("rollback failed: %v", rbErr)
+		}
+		return fmt.Errorf("failed to insert folder: %w", err)
+	}
+
+	var folderID int64
+	err = tx.QueryRowContext(ctx, "SELECT id FROM folders WHERE path = ?", folder.Path).Scan(&folderID)
+	if err != nil {
+		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+			log.Printf("rollback failed: %v", rbErr)
+		}
+		return fmt.Errorf("failed to query folder ID: %w", err)
+	}
+
+	filesInfo, err := GetFilesWithSize(folderPath)
+	if err != nil {
+		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+			log.Printf("rollback failed: %v", rbErr)
+		}
+		return fmt.Errorf("failed to retrieve files info in folder: %w", err)
+	}
+
+	for name, size := range filesInfo {
+		err = executeSQLWithTxEmbed(ctx, tx, "insert_file.sql", folderID, name, size, time.Now().Format("2006-01-02 15:04:05"))
+		if err != nil {
+			if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+				log.Printf("rollback failed: %v", rbErr)
+			}
+			return fmt.Errorf("failed to insert file: %w", err)
+		}
+	}
+
+	err = executeSQLWithTxEmbed(ctx, tx, "update_folders.sql", folderID)
+	if err != nil {
+		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+			log.Printf("rollback failed: %v", rbErr)
+		}
+		return fmt.Errorf("failed to update folder statistics: %w", err)
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
 ```

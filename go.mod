@@ -4,7 +4,7 @@ go 1.22
 
 require (
 	github.com/mattn/go-sqlite3 v1.14.24
-	github.com/seoyhaein/utils v0.0.5
+	github.com/seoyhaein/utils v0.0.6
 	google.golang.org/protobuf v1.35.2
 )
 
