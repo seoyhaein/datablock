@@ -567,7 +567,7 @@ func GetFoldersFromDB(db *sql.DB) (folders []Folder, err error) {
 }
 
 // GetFilesFromDB DB의 파일 정보를 조회하여 File 구조체 슬라이스로 반환함.
-// IMPORTANT: 호출자가 반환된 rows 를 직접 Close() 할 필요는 없음. 내부에서 모두 처리됨. TODO 삭제 예정. getFilesFromDBForFolder 비교 해야 함.
+// IMPORTANT: 호출자가 반환된 rows 를 직접 Close() 할 필요는 없음. 내부에서 모두 처리됨.
 func GetFilesFromDB(db *sql.DB) (files []File, err error) {
 	// "select_files.sql" 파일에 정의된 SELECT 쿼리를 실행하여 파일 정보를 조회
 	rows, err := querySQLNoCtx(db, "select_files.sql")
