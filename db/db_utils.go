@@ -104,11 +104,27 @@ func MakeTestFiles(path string) {
 	}
 }
 
-// db 관련 및 기타 부수 methods 들은 여기다가 임시적으로 넣음.
-
-// ConnectDB is a function to connect to a database
-func ConnectDB(driverName, dataSourceName string) (*sql.DB, error) {
+/*func ConnectDB(driverName, dataSourceName string) (*sql.DB, error) {
 	return sql.Open(driverName, dataSourceName)
+}*/
+
+// ConnectDB 데이터베이스에 연결하고, enableForeignKeys 가 true 이면 SQLite 사용 시 외래 키 제약 조건을 활성화함.
+func ConnectDB(driverName, dataSourceName string, enableForeignKeys bool) (*sql.DB, error) {
+	db, err := sql.Open(driverName, dataSourceName)
+	if err != nil {
+		return nil, err
+	}
+	// SQLite 사용 시, enableForeignKeys 값이 true 이면 외래 키 활성화
+	if driverName == "sqlite3" && enableForeignKeys {
+		if _, err := db.Exec("PRAGMA foreign_keys = ON;"); err != nil {
+			// 외래 키 활성화 실패 시 db.Close() 호출하고, 그 에러도 함께 처리함.
+			if cErr := db.Close(); cErr != nil {
+				return nil, fmt.Errorf("failed to enable foreign keys: %w; additionally failed to close db: %v", err, cErr)
+			}
+			return nil, fmt.Errorf("failed to enable foreign keys: %w", err)
+		}
+	}
+	return db, nil
 }
 
 type File struct {
@@ -263,7 +279,7 @@ func querySQLNoCtx(db *sql.DB, fileName string, args ...interface{}) (*sql.Rows,
 	return querySQL(context.Background(), db, fileName, args...)
 }
 
-// FirstCheck 폴더 경로를 받아 폴더 내 파일 정보를 DB에 삽입하는 함수
+// FirstCheck 폴더 경로를 받아 폴더 내 파일 정보를 DB에 삽입하는 함수, TODO 한번만 실행되고 말아야 함. exclusions 밖으로 빼줄지 생각해야 함.
 func FirstCheck(ctx context.Context, db *sql.DB, folderPath string) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -278,7 +294,7 @@ func FirstCheck(ctx context.Context, db *sql.DB, folderPath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to start transaction: %w", err)
 	}
-	// 폴더에서 제외 해야 할 파일들.
+	// 폴더에서 제외 해야 할 파일들. TODO 이거 따로 빼내자.
 	exclusions := []string{"rule.json", "invalid_files", "fileblock.csv"}
 	folderDetails, fileDetails, err := GetFolderDetails(folderPath, exclusions)
 
@@ -440,7 +456,7 @@ func GetSubFolders(rootPath string, exclusions []string) ([]Folder, error) {
 	// 디렉토리 이름을 비교하여 제외할지 결정하는 헬퍼 함수 TODO utils 에 넣어야 함. 일단은 헬퍼 함수로 남겨둠.
 	excludeDir := func(dirName string, exclusions []string) bool {
 		for _, ex := range exclusions {
-			// 디렉토리 이름이 정확히 일치하거나, ex가 접두어로 있는 경우 제외
+			// 디렉토리 이름이 정확히 일치하는 경우 제외
 			if dirName == ex {
 				return true
 			}
@@ -486,7 +502,13 @@ func GetSubFolders(rootPath string, exclusions []string) ([]Folder, error) {
 
 // GetFolderStats 지정한 Folder 배열에 대해, 각 Folder 의 TotalSize 와 FileCount 값을 계산하여 업데이트함.
 // exclusions: 해당 폴더 내에서 제외할 파일 목록.
-func GetFolderStats(folders []Folder, exclusions []string) ([]Folder, error) {
+func GetFolderStats(rootPath string, exclusions []string) ([]Folder, error) {
+
+	folders, err := GetSubFolders(rootPath, exclusions)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get subfolders: %w", err)
+	}
+
 	for i, folder := range folders {
 		// 각 폴더에 대해 GetFolderDetails 를 호출하여 파일 통계 계산 (파일 정보는 무시)
 		updatedFolder, _, err := GetFolderDetails(folder.Path, exclusions)
@@ -503,7 +525,7 @@ func GetFolderStats(folders []Folder, exclusions []string) ([]Folder, error) {
 }
 
 // GetFoldersFromDB DB의 폴더 정보를 조회하여 Folder 구조체 슬라이스로 반환함.
-// IMPORTANT: 호출자가 반환된 rows를 직접 Close() 할 필요는 없음. 내부에서 모두 처리됨.
+// IMPORTANT: 호출자가 반환된 rows 를 직접 Close() 할 필요는 없음. 내부에서 모두 처리됨.
 func GetFoldersFromDB(db *sql.DB) (folders []Folder, err error) {
 	// "select_folders.sql" 파일에 정의된 SELECT 쿼리를 실행하여 폴더 정보를 조회
 	rows, err := querySQLNoCtx(db, "select_folders.sql")
@@ -539,7 +561,7 @@ func GetFoldersFromDB(db *sql.DB) (folders []Folder, err error) {
 }
 
 // GetFilesInfoFromDB DB의 파일 정보를 조회하여 File 구조체 슬라이스로 반환함.
-// IMPORTANT: 호출자가 반환된 rows 를 직접 Close() 할 필요는 없음. 내부에서 모두 처리됨.
+// IMPORTANT: 호출자가 반환된 rows 를 직접 Close() 할 필요는 없음. 내부에서 모두 처리됨. TODO 삭제 예정. getFilesFromDBForFolder 비교 해야 함.
 func GetFilesInfoFromDB(db *sql.DB) (files []File, err error) {
 	// "select_files.sql" 파일에 정의된 SELECT 쿼리를 실행하여 파일 정보를 조회
 	rows, err := querySQLNoCtx(db, "select_files.sql")
@@ -591,7 +613,7 @@ type FolderDiff struct {
 // 변경 사항이 없으면 true, 변경 사항이 있으면 false 와 함께 차이 정보를 반환함.
 func CompareSubFolderStats(rootPath string, exclusions []string, db *sql.DB) (bool, []FolderDiff, error) {
 	// 디스크에서 서브 Folder 목록 조회
-	diskFolders, err := GetSubFolders(rootPath, exclusions)
+	diskFolders, err := GetFolderStats(rootPath, exclusions)
 	if err != nil {
 		return false, nil, fmt.Errorf("failed to get subfolders from disk: %w", err)
 	}
@@ -646,22 +668,27 @@ type FileChange struct {
 	DBSize     int64  // DB에 저장된 파일 크기
 }
 
-// getFilesFromDBForFolder 는 주어진 Folder 경로에 해당하는 파일 정보를 DB 에서 조회함. TODO defer 수정 필요.
-func getFilesFromDBForFolder(db *sql.DB, folderPath string) ([]File, error) {
-	// 폴더 경로를 기준으로 JOIN 하여 파일 정보 조회
-	// TODO 쿼리 분리 필요.
-	query := `
-SELECT f.id, f.folder_id, f.name, f.size, f.created_time
-FROM files f
-JOIN folders fo ON f.folder_id = fo.id
-WHERE fo.path = ?`
-	rows, err := db.Query(query, folderPath)
+// getFilesFromDBForFolder 는 주어진 Folder 경로에 해당하는 파일 정보를 DB 에서 조회함.
+// IMPORTANT: SQL 쿼리는 "queries/select_files_for_folder.sql" 파일에 분리되어 있음.
+func getFilesFromDBForFolder(db *sql.DB, folderPath string) (files []File, err error) {
+	// "select_files_for_folder.sql" 파일에 정의된 쿼리를 실행하여 파일 정보를 조회
+	rows, err := querySQLNoCtx(db, "select_files_for_folder.sql", folderPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query files for folder %s: %w", folderPath, err)
 	}
-	// TODO 수정 필요.
-	defer rows.Close()
-	var files []File
+
+	// defer rows.Close()
+	defer func() {
+		if cErr := rows.Close(); cErr != nil {
+			if err == nil {
+				err = fmt.Errorf("failed to close rows: %w", cErr)
+			} else {
+				err = fmt.Errorf("%v; failed to close rows: %w", err, cErr)
+			}
+		}
+	}()
+
+	//var files []File
 	for rows.Next() {
 		var f File
 		if err := rows.Scan(&f.ID, &f.FolderID, &f.Name, &f.Size, &f.CreatedTime); err != nil {
@@ -672,10 +699,10 @@ WHERE fo.path = ?`
 	if err = rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows error for folder %s: %w", folderPath, err)
 	}
-	return files, nil
+	return files, err
 }
 
-// CompareFileDetails 는 특정 Folder 내의 파일 정보를 디스크와 DB에서 비교함.
+// CompareFileDetails 는 특정 Folder 내의 파일 정보를 디스크와 DB 에서 비교함.
 // 파일 목록과 크기가 일치하면 true 를, 차이가 있으면 false 와 함께 어떤 파일이 변경되었는지(FileChange 목록) 반환함.
 func CompareFileDetails(folderPath string, exclusions []string, db *sql.DB) (bool, []FileChange, error) {
 	// 디스크의 파일 정보 조회
@@ -721,7 +748,7 @@ func CompareFileDetails(folderPath string, exclusions []string, db *sql.DB) (boo
 			}
 		}
 	}
-	// DB에만 있는 파일 (삭제된 파일)
+	// DB 에만 있는 파일 (삭제된 파일)
 	for name, dbF := range dbMap {
 		if _, ok := diskMap[name]; !ok {
 			changes = append(changes, FileChange{
@@ -736,8 +763,19 @@ func CompareFileDetails(folderPath string, exclusions []string, db *sql.DB) (boo
 	return unchanged, changes, nil
 }
 
+// CheckForeignKeysEnabled DB 연결에서 외래 키가 활성화되었는지 확인함.
+// IMPORTANT: fk 값이 1이면 외래 키가 활성화된 상태임.
+func CheckForeignKeysEnabled(db *sql.DB) (bool, error) {
+	var fk int
+	err := db.QueryRow("PRAGMA foreign_keys").Scan(&fk)
+	if err != nil {
+		return false, fmt.Errorf("failed to check foreign keys: %w", err)
+	}
+	return fk == 1, nil
+}
+
 // for test
-func clearDatabase(db *sql.DB) error {
+func ClearDatabase(db *sql.DB) error {
 	// 외래 키 제약 조건이 ON DELETE CASCADE 로 설정되어 있다면, folders 테이블에서 데이터를 삭제하면 files 테이블의 데이터도 자동 삭제.
 	_, err := db.Exec("DELETE FROM folders;")
 	return err

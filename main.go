@@ -5,22 +5,30 @@ import (
 	"fmt"
 	_ "github.com/mattn/go-sqlite3"
 	c "github.com/seoyhaein/datablock/config"
-	u "github.com/seoyhaein/datablock/db"
+	d "github.com/seoyhaein/datablock/db"
 	"os"
+	"path"
+	"path/filepath"
 )
 
 func main() {
 
-	//db connection
-	db, err := u.ConnectDB("sqlite3", "file_monitor.db")
+	//_ = RemoveDBFile("file_monitor.db")
+	//db connection foreign key 설정을 위해 PRAGMA foreign_keys = ON; 설정을 해줘야 함.
+	db, err := d.ConnectDB("sqlite3", "file_monitor.db", true)
 	if err != nil {
 		os.Exit(1)
 	}
-	err = u.InitializeDatabase(db)
+	err = d.InitializeDatabase(db) // TODO 향후 api 로 따로 빼놓아야 할듯. ConnectDB 는 기본으로 해주고 db 를 초기화하고 데이터를 넣어주는 api 를 따로 만들어 주어야 할듯.
 	if err != nil {
 		os.Exit(1)
 	}
 	defer func() {
+		/*if err = d.ClearDatabase(db); err != nil {
+			//log.Fatal("failed to clear db:", err)
+			os.Exit(1)
+		}*/
+
 		if err := db.Close(); err != nil {
 			//log.Fatal("failed to close db:", err)
 			os.Exit(1) // defer 내부에서도 os.Exit 사용 가능
@@ -32,15 +40,25 @@ func main() {
 	if err != nil {
 		os.Exit(1)
 	}
-	path := config.RootDir
+
+	// 테스트를 위해서 조정해줌
+	testFilePath := config.RootDir
 	// 테스트로 빈파일 생성
 	// 기존 파일이 생성되어 있을 경우 권한 설정을 안해줌. 버그지만 고치지 않음.
-	u.MakeTestFiles(path)
+	testFilePath = filepath.Join(testFilePath, "testFiles/")
+	testFilePath = path.Clean(testFilePath)
+	d.MakeTestFiles(testFilePath)
 
 	ctx := context.Background()
-	err = u.FirstCheck(ctx, db, path)
+	// TODO 메서드들을 모아주는 거 생각하자. 일단은 이렇게 해놓음. 향후 api 로 따로 빼놓아야 할듯. ConnectDB 는 기본으로 해주고 db 를 초기화하고 데이터를 넣어주는 api 를 따로 만들어 주어야 할듯.
+	err = d.FirstCheck(ctx, db, testFilePath) // TODO 데이터를 넣어주는 것임으로 이름을 바꾸는 방향으로 가자.
 	if err != nil {
 		fmt.Println("FirstCheckEmbed Error")
+	}
+	exclusions := []string{"rule.json", "invalid_files", "fileblock.csv"}
+	bSame, _, err := d.CompareSubFolderStats(config.RootDir, exclusions, db)
+	if bSame {
+		fmt.Println("일단 성공")
 	}
 
 	/*
@@ -59,4 +77,13 @@ func main() {
 				os.Exit(1)
 			}
 	*/
+}
+
+// RemoveDBFile 주어진 DB 파일을 삭제함.
+// filePath: 삭제할 DB 파일의 경로.
+func RemoveDBFile(filePath string) error {
+	if err := os.Remove(filePath); err != nil {
+		return fmt.Errorf("failed to remove DB file %s: %w", filePath, err)
+	}
+	return nil
 }
