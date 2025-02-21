@@ -1,19 +1,17 @@
 # datablock (Packrat 라고 이름 바꾸는 것을 생각해보자. blocky 는 이미 있음.)
 
 ## dependencies
-- fsnotify
-- install : go get -u github.com/fsnotify/fsnotify
-- golang.org/x/sys 이것도 자동으로 설치됨.
-- fsnotify v1.8.0, x/sys v0.26.0
-
-## 개발 시작
-- 먼저 사용자 입력 값은 최소한으로 받도록 한다. main 으로 일단 접근해서 향후 필요에 따라서 붙이는 방향으로 간다.  
+~~- fsnotify (사용안함.)~~ backup 참조
+~~- install : go get -u github.com/fsnotify/fsnotify~~
+~~- golang.org/x/sys 이것도 자동으로 설치됨.~~
+~~- fsnotify v1.8.0, x/sys v0.26.0~~
 
 ## TODO
-- main 에서 부터 이제 어떻게 다시 시나리오를 만들어 갈지 구상 해야함.  
+~~- main 에서 부터 이제 어떻게 다시 시나리오를 만들어 갈지 구상 해야함.~~  
 - 검색 기능 넣고, grpc 연동 진행.
 - 기초 grpc 넣어두고 grpc 프로젝트 만들고 고도화 함.
-- 사용자 편의성 생각할 것. exit 을 넣으면 종료 되는데 이게 로그가 올라오면 사라짐.
+~~- 사용자 편의성 생각할 것. exit 을 넣으면 종료 되는데 이게 로그가 올라오면 사라짐.(필요없음)~~
+- Makefile 현재 설정이 내 노트북으로 되어 있는데 이거 확장가능하도록 하자. 우선 순위 낮음. 컨테이너로 하는 방향으로 해서 볼륨 연결해서 pb.go 파일들만 얻는 방식으로 진행하자.
 
 ## 수정할 것들.
 ~~- 일단 굴러가게만 하자.~~  
@@ -27,7 +25,7 @@
 ~~- sql 구문 에러 표시되는거 확인하자.~~
 
 ## 생각해봐야 할 것
-- 조금더 사용자 친화적으로 할 수 있는 방법이 없는지 생각해보자.  
+~~- 조금더 사용자 친화적으로 할 수 있는 방법이 없는지 생각해보자.(필요없음.)~~ 사용자 명령은 감추어 둘 것임. 어드민으로)    
 ~~- 디렉토리 관련해서 개발을 시작해야 할 것 같다.~~
 - 사용자에게 직접 입력 받는 것은 최소화 하고, 부모 app 에게 명령을 받는 형태로 하는게 좋을 것 같다.
 - 최초 사용과 그 이후 사용에 대해서 구별을 자동으로 해주는 방향으로 가자.
@@ -36,17 +34,6 @@
 ## update 
 - 로그 관련 표준 정하자.  
 
-
-````txt
-	//path := "/tmp/testfiles"
-	// 테스트로 빈파일 생성
-	//MakeTestFiles(path)
-
-	//err := rule.ApplyRule(path)
-	//if err != nil { // 에러 발생 시 종료
-	//	os.Exit(1)
-	//}
-````
 
 ### 참고 하기
 https://github.com/charmbracelet/bubbletea/tree/main
