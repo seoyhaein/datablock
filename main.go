@@ -51,12 +51,12 @@ func main() {
 
 	ctx := context.Background()
 	// TODO 메서드들을 모아주는 거 생각하자. 일단은 이렇게 해놓음. 향후 api 로 따로 빼놓아야 할듯. ConnectDB 는 기본으로 해주고 db 를 초기화하고 데이터를 넣어주는 api 를 따로 만들어 주어야 할듯.
-	err = d.FirstCheck(ctx, db, testFilePath) // TODO 데이터를 넣어주는 것임으로 이름을 바꾸는 방향으로 가자.
+	exclusions := []string{"rule.json", "invalid_files", "fileblock.csv"}
+	err = d.StoreFilesFolderInfo(ctx, db, testFilePath, exclusions)
 	if err != nil {
 		fmt.Println("FirstCheckEmbed Error")
 	}
-	exclusions := []string{"rule.json", "invalid_files", "fileblock.csv"}
-	bSame, _, err := d.CompareSubFolderStats(config.RootDir, exclusions, db)
+	bSame, _, err := d.CompareFolders(config.RootDir, exclusions, db)
 	if bSame {
 		fmt.Println("일단 성공")
 	}

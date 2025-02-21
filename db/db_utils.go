@@ -104,9 +104,42 @@ func MakeTestFiles(path string) {
 	}
 }
 
-/*func ConnectDB(driverName, dataSourceName string) (*sql.DB, error) {
-	return sql.Open(driverName, dataSourceName)
-}*/
+// structures
+
+type File struct {
+	ID          int64  `db:"id"`
+	FolderID    int64  `db:"folder_id"`
+	Name        string `db:"name"`
+	Size        int64  `db:"size"`
+	CreatedTime string `db:"created_time"` // sting 으로 해도 충분
+}
+
+type Folder struct {
+	ID          int64  `db:"id"`
+	Path        string `db:"path"`
+	TotalSize   int64  `db:"total_size"`
+	FileCount   int64  `db:"file_count"`
+	CreatedTime string `db:"created_time"` // sting 으로 해도 충분
+}
+
+// FolderDiff 는 디스크와 DB의 Folder 통계가 다른 경우의 차이를 나타냄.
+type FolderDiff struct {
+	Path          string // Folder 경로
+	DiskTotalSize int64  // 디스크상의 총 크기
+	DBTotalSize   int64  // DB에 저장된 총 크기
+	DiskFileCount int64  // 디스크상의 파일 개수
+	DBFileCount   int64  // DB에 저장된 파일 개수
+}
+
+// FileChange 는 특정 Folder 내에서 디스크와 DB의 파일 정보가 다를 경우 그 차이를 나타냄.
+type FileChange struct {
+	ChangeType string // "added", "removed", "modified"
+	Name       string // 파일 이름
+	DiskSize   int64  // 디스크상의 파일 크기
+	DBSize     int64  // DB에 저장된 파일 크기
+}
+
+// db 관련
 
 // ConnectDB 데이터베이스에 연결하고, enableForeignKeys 가 true 이면 SQLite 사용 시 외래 키 제약 조건을 활성화함.
 func ConnectDB(driverName, dataSourceName string, enableForeignKeys bool) (*sql.DB, error) {
@@ -127,53 +160,18 @@ func ConnectDB(driverName, dataSourceName string, enableForeignKeys bool) (*sql.
 	return db, nil
 }
 
-type File struct {
-	ID          int64  `db:"id"`
-	FolderID    int64  `db:"folder_id"`
-	Name        string `db:"name"`
-	Size        int64  `db:"size"`
-	CreatedTime string `db:"created_time"` // sting 으로 해도 충분
-}
-
-type Folder struct {
-	ID          int64  `db:"id"`
-	Path        string `db:"path"`
-	TotalSize   int64  `db:"total_size"`
-	FileCount   int64  `db:"file_count"`
-	CreatedTime string `db:"created_time"` // sting 으로 해도 충분
-}
-
-// GetFilesWithSize 특정 폴더에서 파일 이름과 해당 파일 크기를 가져오는 함수, 삭제 예정.
-func GetFilesWithSize(directoryPath string) (map[string]int64, error) {
-	filesInfo := make(map[string]int64)
-
-	// 폴더 내 파일 목록 탐색 **Go 1.16 이후 부터 가능.**
-	entries, err := os.ReadDir(directoryPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read directory %s: %w", directoryPath, err)
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue // 폴더는 무시하고 파일만 처리
+// InitializeDatabase embed 된  SQL 파일(init.sql)을 사용하여 데이터베이스를 초기화
+func InitializeDatabase(db *sql.DB) error {
+	if !isDBInitialized(db) {
+		log.Println("Running DB initialization (embed)...")
+		if err := execSQLNoCtx(db, "init.sql"); err != nil {
+			return fmt.Errorf("DB initialization failed: %w", err)
 		}
-
-		// 파일 전체 경로
-		filePath := filepath.Join(directoryPath, entry.Name())
-
-		// 파일 정보 가져오기
-		// Go 1.16 이후 부터 os.ReadDir 함수가 반환하는 DirEntry 에는 Info()메서드가 있어, 이 메서드를 사용하면 추가적인 시스템 콜 없이 파일 정보를 가져올 수 있음.
-		// fileInfo, err := os.Stat(filePath) 이 코드 대신 아래 코드로 대체 가능
-		fileInfo, err := entry.Info()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get file info for %s: %w", filePath, err)
-		}
-
-		// 파일 이름과 크기 저장
-		filesInfo[entry.Name()] = fileInfo.Size()
+		log.Println("DB initialization completed successfully (embed).")
+	} else {
+		log.Println("DB already initialized. Skipping init.sql execution.")
 	}
-
-	return filesInfo, nil
+	return nil
 }
 
 func isDBInitialized(db *sql.DB) bool {
@@ -185,6 +183,8 @@ func isDBInitialized(db *sql.DB) bool {
 	}
 	return count == 2 // folders, files 두 테이블이 모두 있어야 true 반환
 }
+
+// db utils
 
 // execSQLTx 읽어온 SQL 파일을 트랜잭션 내에서 ExecContext 로 실행.
 // IMPORTANT: 비 SELECT 쿼리에 사용. (결과 리턴 없음)
@@ -279,8 +279,10 @@ func querySQLNoCtx(db *sql.DB, fileName string, args ...interface{}) (*sql.Rows,
 	return querySQL(context.Background(), db, fileName, args...)
 }
 
-// FirstCheck 폴더 경로를 받아 폴더 내 파일 정보를 DB에 삽입하는 함수, TODO 한번만 실행되고 말아야 함. exclusions 밖으로 빼줄지 생각해야 함.
-func FirstCheck(ctx context.Context, db *sql.DB, folderPath string) error {
+// 외부 사용 메서드
+
+// StoreFilesFolderInfo 폴더 경로를 받아 폴더 내 파일 정보를 DB에 삽입하는 함수, TODO 한번만 실행되고 말아야 함.
+func StoreFilesFolderInfo(ctx context.Context, db *sql.DB, folderPath string, exclusions []string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -294,9 +296,8 @@ func FirstCheck(ctx context.Context, db *sql.DB, folderPath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to start transaction: %w", err)
 	}
-	// 폴더에서 제외 해야 할 파일들. TODO 이거 따로 빼내자.
-	exclusions := []string{"rule.json", "invalid_files", "fileblock.csv"}
-	folderDetails, fileDetails, err := GetFolderDetails(folderPath, exclusions)
+
+	folderDetails, fileDetails, err := GetCurrentFolderFileInfo(folderPath, exclusions)
 
 	if err != nil {
 		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
@@ -360,23 +361,30 @@ func FirstCheck(ctx context.Context, db *sql.DB, folderPath string) error {
 	return nil
 }
 
-// InitializeDatabase embed 된  SQL 파일(init.sql)을 사용하여 데이터베이스를 초기화
-func InitializeDatabase(db *sql.DB) error {
-	if !isDBInitialized(db) {
-		log.Println("Running DB initialization (embed)...")
-		if err := execSQLNoCtx(db, "init.sql"); err != nil {
-			return fmt.Errorf("DB initialization failed: %w", err)
-		}
-		log.Println("DB initialization completed successfully (embed).")
-	} else {
-		log.Println("DB already initialized. Skipping init.sql execution.")
+// StoreFoldersInfo rootPath 하위의 모든 Folder 에 대해 파일 정보를 DB에 삽입함.
+func StoreFoldersInfo(ctx context.Context, db *sql.DB, rootPath string, exclusions []string) error {
+	// rootPath 하위의 Folder 목록 조회
+	folders, err := GetSubFolders(rootPath, exclusions)
+	if err != nil {
+		return fmt.Errorf("failed to get subfolders from %s: %w", rootPath, err)
 	}
+
+	// 각 서브 Folder 에 대해 파일 정보를 DB에 삽입
+	for _, folder := range folders {
+		err = StoreFilesFolderInfo(ctx, db, folder.Path, exclusions)
+		if err != nil {
+			return fmt.Errorf("failed to load files info for folder %s: %w", folder.Path, err)
+		}
+	}
+
 	return nil
 }
 
-// GetFolderDetails 특정 디렉토리 내의 파일들을 읽어 전체 파일 개수, 총 크기와 각 파일의 메타데이터를 수집.
+// 디렉토리 메서드
+
+// GetCurrentFolderFileInfo 특정 디렉토리 내의 파일들을 읽어 전체 파일 개수, 총 크기와 각 파일의 메타데이터를 수집.
 // Go 1.16부터 도입된 os.ReadDir, DirEntry.Info()를 사용하여 시스템 콜을 최소화함. dirPath 여기서 이 폴더는 조사하고자 하는 자신의 폴더 path 임.
-func GetFolderDetails(dirPath string, exclusions []string) (Folder, []File, error) {
+func GetCurrentFolderFileInfo(dirPath string, exclusions []string) (Folder, []File, error) {
 	var folder Folder
 	var files []File
 
@@ -438,10 +446,6 @@ func GetFolderDetails(dirPath string, exclusions []string) (Folder, []File, erro
 	return folder, files, nil
 }
 
-// 먼저 folder 들을 비교하자. 이름을 일단 통일 시키자. folder 로 할 지 directory 로 할지.
-// 차이점이 있는지 확인 해야함.
-// 그 후에 file 들을 비교해본다.
-
 // GetSubFolders 특정 디렉토리 내의 서브 폴더(디렉토리)들을 읽어 Folder 구조체 슬라이스로 반환함.
 // IMPORTANT: exclusions 목록에 포함된 이름과 정확히 일치하거나 접두어로 시작하는 폴더는 제외함.
 func GetSubFolders(rootPath string, exclusions []string) ([]Folder, error) {
@@ -500,9 +504,9 @@ func GetSubFolders(rootPath string, exclusions []string) ([]Folder, error) {
 	return folders, nil
 }
 
-// GetFolderStats 지정한 Folder 배열에 대해, 각 Folder 의 TotalSize 와 FileCount 값을 계산하여 업데이트함.
+// GetFoldersInfo 지정한 Folder 배열에 대해, 각 Folder 의 TotalSize 와 FileCount 값을 계산하여 업데이트함.
 // exclusions: 해당 폴더 내에서 제외할 파일 목록.
-func GetFolderStats(rootPath string, exclusions []string) ([]Folder, error) {
+func GetFoldersInfo(rootPath string, exclusions []string) ([]Folder, error) {
 
 	folders, err := GetSubFolders(rootPath, exclusions)
 	if err != nil {
@@ -510,8 +514,8 @@ func GetFolderStats(rootPath string, exclusions []string) ([]Folder, error) {
 	}
 
 	for i, folder := range folders {
-		// 각 폴더에 대해 GetFolderDetails 를 호출하여 파일 통계 계산 (파일 정보는 무시)
-		updatedFolder, _, err := GetFolderDetails(folder.Path, exclusions)
+		// 각 폴더에 대해 GetCurrentFolderFileInfo 를 호출하여 파일 통계 계산 (파일 정보는 무시)
+		updatedFolder, _, err := GetCurrentFolderFileInfo(folder.Path, exclusions)
 		if err != nil {
 			return nil, fmt.Errorf("failed to compute stats for folder %s: %w", folder.Path, err)
 		}
@@ -523,6 +527,8 @@ func GetFolderStats(rootPath string, exclusions []string) ([]Folder, error) {
 	}
 	return folders, nil
 }
+
+// DB 메서드
 
 // GetFoldersFromDB DB의 폴더 정보를 조회하여 Folder 구조체 슬라이스로 반환함.
 // IMPORTANT: 호출자가 반환된 rows 를 직접 Close() 할 필요는 없음. 내부에서 모두 처리됨.
@@ -560,16 +566,15 @@ func GetFoldersFromDB(db *sql.DB) (folders []Folder, err error) {
 	return folders, nil
 }
 
-// GetFilesInfoFromDB DB의 파일 정보를 조회하여 File 구조체 슬라이스로 반환함.
+// GetFilesFromDB DB의 파일 정보를 조회하여 File 구조체 슬라이스로 반환함.
 // IMPORTANT: 호출자가 반환된 rows 를 직접 Close() 할 필요는 없음. 내부에서 모두 처리됨. TODO 삭제 예정. getFilesFromDBForFolder 비교 해야 함.
-func GetFilesInfoFromDB(db *sql.DB) (files []File, err error) {
+func GetFilesFromDB(db *sql.DB) (files []File, err error) {
 	// "select_files.sql" 파일에 정의된 SELECT 쿼리를 실행하여 파일 정보를 조회
 	rows, err := querySQLNoCtx(db, "select_files.sql")
 	if err != nil {
 		return nil, fmt.Errorf("failed to query files: %w", err)
 	}
 
-	//defer rows.Close()
 	defer func() {
 		if cErr := rows.Close(); cErr != nil {
 			if err == nil {
@@ -580,7 +585,6 @@ func GetFilesInfoFromDB(db *sql.DB) (files []File, err error) {
 		}
 	}()
 
-	//var files []File
 	// 각 행을 순회하면서 File 구조체에 스캔
 	for rows.Next() {
 		var f File
@@ -598,22 +602,45 @@ func GetFilesInfoFromDB(db *sql.DB) (files []File, err error) {
 	return files, nil
 }
 
-// TODO 테스트 필요 및 메서드 수정 필요.
+// GetFilesByPathFromDB 는 주어진 Folder 경로에 해당하는 파일 정보를 DB 에서 조회함.
+// IMPORTANT: SQL 쿼리는 "queries/select_files_for_folder.sql" 파일에 분리되어 있음.
+func GetFilesByPathFromDB(db *sql.DB, folderPath string) (files []File, err error) {
+	// "select_files_for_folder.sql" 파일에 정의된 쿼리를 실행하여 파일 정보를 조회
+	rows, err := querySQLNoCtx(db, "select_files_for_folder.sql", folderPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query files for folder %s: %w", folderPath, err)
+	}
 
-// FolderDiff 는 디스크와 DB의 Folder 통계가 다른 경우의 차이를 나타냄.
-type FolderDiff struct {
-	Path          string // Folder 경로
-	DiskTotalSize int64  // 디스크상의 총 크기
-	DBTotalSize   int64  // DB에 저장된 총 크기
-	DiskFileCount int64  // 디스크상의 파일 개수
-	DBFileCount   int64  // DB에 저장된 파일 개수
+	defer func() {
+		if cErr := rows.Close(); cErr != nil {
+			if err == nil {
+				err = fmt.Errorf("failed to close rows: %w", cErr)
+			} else {
+				err = fmt.Errorf("%v; failed to close rows: %w", err, cErr)
+			}
+		}
+	}()
+
+	for rows.Next() {
+		var f File
+		if err := rows.Scan(&f.ID, &f.FolderID, &f.Name, &f.Size, &f.CreatedTime); err != nil {
+			return nil, fmt.Errorf("failed to scan file for folder %s: %w", folderPath, err)
+		}
+		files = append(files, f)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error for folder %s: %w", folderPath, err)
+	}
+	return files, err
 }
 
-// CompareSubFolderStats 는 rootPath 밑의 서브 Folder 들의 통계를 디스크와 DB 에서 비교함.
+// 비교 메서드
+
+// CompareFolders 는 rootPath 밑의 서브 Folder 들의 통계를 디스크와 DB 에서 비교함.
 // 변경 사항이 없으면 true, 변경 사항이 있으면 false 와 함께 차이 정보를 반환함.
-func CompareSubFolderStats(rootPath string, exclusions []string, db *sql.DB) (bool, []FolderDiff, error) {
+func CompareFolders(rootPath string, exclusions []string, db *sql.DB) (bool, []FolderDiff, error) {
 	// 디스크에서 서브 Folder 목록 조회
-	diskFolders, err := GetFolderStats(rootPath, exclusions)
+	diskFolders, err := GetFoldersInfo(rootPath, exclusions)
 	if err != nil {
 		return false, nil, fmt.Errorf("failed to get subfolders from disk: %w", err)
 	}
@@ -631,7 +658,7 @@ func CompareSubFolderStats(rootPath string, exclusions []string, db *sql.DB) (bo
 	var diffs []FolderDiff
 	// 디스크의 각 Folder 에 대해 파일 통계를 갱신한 후 DB와 비교
 	for _, diskFolder := range diskFolders {
-		updatedFolder, _, err := GetFolderDetails(diskFolder.Path, exclusions)
+		updatedFolder, _, err := GetCurrentFolderFileInfo(diskFolder.Path, exclusions)
 		if err != nil {
 			return false, nil, fmt.Errorf("failed to get folder details for %s: %w", diskFolder.Path, err)
 		}
@@ -660,58 +687,16 @@ func CompareSubFolderStats(rootPath string, exclusions []string, db *sql.DB) (bo
 	return unchanged, diffs, nil
 }
 
-// FileChange 는 특정 Folder 내에서 디스크와 DB의 파일 정보가 다를 경우 그 차이를 나타냄.
-type FileChange struct {
-	ChangeType string // "added", "removed", "modified"
-	Name       string // 파일 이름
-	DiskSize   int64  // 디스크상의 파일 크기
-	DBSize     int64  // DB에 저장된 파일 크기
-}
-
-// getFilesFromDBForFolder 는 주어진 Folder 경로에 해당하는 파일 정보를 DB 에서 조회함.
-// IMPORTANT: SQL 쿼리는 "queries/select_files_for_folder.sql" 파일에 분리되어 있음.
-func getFilesFromDBForFolder(db *sql.DB, folderPath string) (files []File, err error) {
-	// "select_files_for_folder.sql" 파일에 정의된 쿼리를 실행하여 파일 정보를 조회
-	rows, err := querySQLNoCtx(db, "select_files_for_folder.sql", folderPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query files for folder %s: %w", folderPath, err)
-	}
-
-	// defer rows.Close()
-	defer func() {
-		if cErr := rows.Close(); cErr != nil {
-			if err == nil {
-				err = fmt.Errorf("failed to close rows: %w", cErr)
-			} else {
-				err = fmt.Errorf("%v; failed to close rows: %w", err, cErr)
-			}
-		}
-	}()
-
-	//var files []File
-	for rows.Next() {
-		var f File
-		if err := rows.Scan(&f.ID, &f.FolderID, &f.Name, &f.Size, &f.CreatedTime); err != nil {
-			return nil, fmt.Errorf("failed to scan file for folder %s: %w", folderPath, err)
-		}
-		files = append(files, f)
-	}
-	if err = rows.Err(); err != nil {
-		return nil, fmt.Errorf("rows error for folder %s: %w", folderPath, err)
-	}
-	return files, err
-}
-
-// CompareFileDetails 는 특정 Folder 내의 파일 정보를 디스크와 DB 에서 비교함.
+// CompareFiles 는 특정 Folder 내의 파일 정보를 디스크와 DB 에서 비교함.
 // 파일 목록과 크기가 일치하면 true 를, 차이가 있으면 false 와 함께 어떤 파일이 변경되었는지(FileChange 목록) 반환함.
-func CompareFileDetails(folderPath string, exclusions []string, db *sql.DB) (bool, []FileChange, error) {
+func CompareFiles(folderPath string, exclusions []string, db *sql.DB) (bool, []FileChange, error) {
 	// 디스크의 파일 정보 조회
-	_, diskFiles, err := GetFolderDetails(folderPath, exclusions)
+	_, diskFiles, err := GetCurrentFolderFileInfo(folderPath, exclusions)
 	if err != nil {
 		return false, nil, fmt.Errorf("failed to get folder details for %s: %w", folderPath, err)
 	}
 	// DB의 파일 정보 조회 (해당 Folder 에 해당하는)
-	dbFiles, err := getFilesFromDBForFolder(db, folderPath)
+	dbFiles, err := GetFilesByPathFromDB(db, folderPath)
 	if err != nil {
 		return false, nil, fmt.Errorf("failed to get DB files for folder %s: %w", folderPath, err)
 	}

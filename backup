@@ -1647,4 +1647,37 @@ func FirstCheck_Old(ctx context.Context, db *sql.DB, folderPath string) error {
 	return nil
 }
 
+// GetFilesWithSize 특정 폴더에서 파일 이름과 해당 파일 크기를 가져오는 함수, 삭제 예정.
+func GetFilesWithSize(directoryPath string) (map[string]int64, error) {
+	filesInfo := make(map[string]int64)
+
+	// 폴더 내 파일 목록 탐색 **Go 1.16 이후 부터 가능.**
+	entries, err := os.ReadDir(directoryPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read directory %s: %w", directoryPath, err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue // 폴더는 무시하고 파일만 처리
+		}
+
+		// 파일 전체 경로
+		filePath := filepath.Join(directoryPath, entry.Name())
+
+		// 파일 정보 가져오기
+		// Go 1.16 이후 부터 os.ReadDir 함수가 반환하는 DirEntry 에는 Info()메서드가 있어, 이 메서드를 사용하면 추가적인 시스템 콜 없이 파일 정보를 가져올 수 있음.
+		// fileInfo, err := os.Stat(filePath) 이 코드 대신 아래 코드로 대체 가능
+		fileInfo, err := entry.Info()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get file info for %s: %w", filePath, err)
+		}
+
+		// 파일 이름과 크기 저장
+		filesInfo[entry.Name()] = fileInfo.Size()
+	}
+
+	return filesInfo, nil
+}
+
 ```
