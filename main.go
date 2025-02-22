@@ -13,7 +13,7 @@ import (
 
 func main() {
 
-	//_ = RemoveDBFile("file_monitor.db")
+	_ = RemoveDBFile("file_monitor.db")
 	//db connection foreign key 설정을 위해 PRAGMA foreign_keys = ON; 설정을 해줘야 함.
 	db, err := d.ConnectDB("sqlite3", "file_monitor.db", true)
 	if err != nil {
@@ -48,17 +48,21 @@ func main() {
 	testFilePath = filepath.Join(testFilePath, "testFiles/")
 	testFilePath = path.Clean(testFilePath)
 	d.MakeTestFiles(testFilePath)
+	d.MakeTestFilesA("/test/baba/")
 
 	ctx := context.Background()
 	// TODO 메서드들을 모아주는 거 생각하자. 일단은 이렇게 해놓음. 향후 api 로 따로 빼놓아야 할듯. ConnectDB 는 기본으로 해주고 db 를 초기화하고 데이터를 넣어주는 api 를 따로 만들어 주어야 할듯.
 	exclusions := []string{"rule.json", "invalid_files", "fileblock.csv"}
-	err = d.StoreFilesFolderInfo(ctx, db, testFilePath, exclusions)
+	err = d.StoreFoldersInfo(ctx, db, "/test/", exclusions)
 	if err != nil {
-		fmt.Println("FirstCheckEmbed Error")
+		fmt.Println("StoreFoldersInfo Error")
 	}
-	bSame, _, err := d.CompareFolders(config.RootDir, exclusions, db)
+	bSame, _, err := d.CompareFolders(db, config.RootDir, exclusions)
 	if bSame {
-		fmt.Println("일단 성공")
+		bSame, _, err = d.CompareFiles(db, "/test", exclusions)
+		if bSame {
+			fmt.Println("Same")
+		}
 	}
 
 	/*

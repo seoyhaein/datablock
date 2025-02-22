@@ -104,6 +104,49 @@ func MakeTestFiles(path string) {
 	}
 }
 
+func MakeTestFilesA(path string) {
+	// 디렉토리 생성
+	err := os.MkdirAll(path, os.ModePerm)
+	if err != nil {
+		log.Fatalf("Failed to create directory %s: %v", path, err)
+	}
+
+	// 디렉토리 권한을 777로 설정 os.ModePerm 해줌.
+	/*err = os.Chmod(path, 0777) //0o777 이 방식보다 0777 방식 사용
+	if err != nil {
+		log.Fatalf("Failed to set permissions for directory %s: %v", path, err)
+	}*/
+
+	// 테스트 파일 이름 목록
+
+	fileNames := []string{
+		"SRA_S1_L001_R1_001.fastq.gz",
+		"SRA_S1_L001_R2_001.fastq.gz",
+		"SRA_S1_L002_R1_001.fastq.gz",
+		"SRA_S1_L002_R2_001.fastq.gz",
+	}
+	/*
+		incompleteFileNames := []string{
+			"sample1_S1_L001_R1_001.fastq.gz",
+			"sample1_S1_L001_R2_001.fastq.gz",
+			"sample13_S13_L001_R1.fastq.gz",
+			"sample14_S14_L001_R2_001.fastq",
+			"sample15_S15_L001_001.fastq.gz",
+			"sample16_S16_L001.fastq.gz",
+		}
+	*/
+	// 파일 생성
+	for _, fileName := range fileNames {
+		filePath := fmt.Sprintf("%s/%s", path, fileName)
+		_, err := os.Create(filePath)
+		if err != nil {
+			log.Fatalf("Failed to create file %s: %v", filePath, err)
+		} else {
+			log.Printf("Created file: %s", filePath)
+		}
+	}
+}
+
 // structures
 
 type File struct {
@@ -638,7 +681,7 @@ func GetFilesByPathFromDB(db *sql.DB, folderPath string) (files []File, err erro
 
 // CompareFolders 는 rootPath 밑의 서브 Folder 들의 통계를 디스크와 DB 에서 비교함.
 // 변경 사항이 없으면 true, 변경 사항이 있으면 false 와 함께 차이 정보를 반환함.
-func CompareFolders(rootPath string, exclusions []string, db *sql.DB) (bool, []FolderDiff, error) {
+func CompareFolders(db *sql.DB, rootPath string, exclusions []string) (bool, []FolderDiff, error) {
 	// 디스크에서 서브 Folder 목록 조회
 	diskFolders, err := GetFoldersInfo(rootPath, exclusions)
 	if err != nil {
@@ -689,7 +732,7 @@ func CompareFolders(rootPath string, exclusions []string, db *sql.DB) (bool, []F
 
 // CompareFiles 는 특정 Folder 내의 파일 정보를 디스크와 DB 에서 비교함.
 // 파일 목록과 크기가 일치하면 true 를, 차이가 있으면 false 와 함께 어떤 파일이 변경되었는지(FileChange 목록) 반환함.
-func CompareFiles(folderPath string, exclusions []string, db *sql.DB) (bool, []FileChange, error) {
+func CompareFiles(db *sql.DB, folderPath string, exclusions []string) (bool, []FileChange, error) {
 	// 디스크의 파일 정보 조회
 	_, diskFiles, err := GetCurrentFolderFileInfo(folderPath, exclusions)
 	if err != nil {
