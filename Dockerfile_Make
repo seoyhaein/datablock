@@ -75,5 +75,7 @@ WORKDIR /app/gen
 # RUN make generate
 # RUN make -C gen generate
 
-# Debug 때믄에 이렇게 잡아놈.
+# Debug 때문에 이렇게 잡아놓음. 디버깅 할때는 아래 처럼 사용함.
+# CMD ["bash"]
+
 CMD ["make", "generate"]
