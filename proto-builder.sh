@@ -16,5 +16,6 @@ echo "Podman image built successfully."
 
 # 디버깅을 위해 호스트의 protos 폴더를 컨테이너의 /app/protos 에 마운트
 # -it: 인터랙티브 모드, --rm: 종료 후 컨테이너 자동 삭제
+# --privileged podman rootless 사용하기 때문에 make 사용할려면 써야 함.
 echo "Running Podman container in interactive mode..."
 podman run -it --privileged --rm -v "$(pwd)/protos":/app/protos "${IMAGE_NAME}"
