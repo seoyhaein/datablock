@@ -75,5 +75,5 @@ WORKDIR /app/gen
 # RUN make generate
 # RUN make -C gen generate
 
-# Debug 때믄에 이렇게 잡아놈. TODO 향후 디버깅 끝나면 make 로 바꿍 예정.
+# Debug 때믄에 이렇게 잡아놈.
 CMD ["make", "generate"]
