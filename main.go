@@ -58,31 +58,37 @@ func main() {
 	// TODO 아래 폴더들을 생각해서 일단 작성하자.
 	exclusions := []string{"*.json", "invalid_files", "*.csv", "*.pb"}
 
-	err = d.StoreFoldersInfo(ctx, db, "/test/", nil, exclusions)
+	err = d.StoreFoldersInfo(ctx, db, config.RootDir, nil, exclusions)
 	if err != nil {
 		fmt.Println("StoreFoldersInfo Error")
 	}
 
-	bSame, _, err := d.CompareFolders(db, config.RootDir, nil, exclusions)
+	// 일단 이렇게 대략적으로 구성함.
+	bSame, folders, _, err := d.CompareFolders(db, config.RootDir, nil, exclusions)
 	if bSame {
-		bSame, _, err = d.CompareFiles(db, "/test", exclusions)
-		if bSame {
-			fmt.Println("Same")
+		for _, folder := range folders {
+			bSame, files, _, _ := d.CompareFiles(db, folder.Path, exclusions)
+			if bSame {
+				fmt.Println("Same")
 
-			data, err := r.GenerateMap("/test/baba/")
-			if err != nil { // 에러 발생 시 종료
-				os.Exit(1)
-			}
-			// TODO ConvertMapToFileBlockData GenerateMap 에 통합 시켜도 됨. header 때문에.
-			// blockID 같은 경우는 폴더명으로 한다. 고유해야 함.
-			headers := []string{"r1", "r2"}
-			fbd := v1rpc.ConvertMapToFileBlockData(data, headers, "tester")
+				fileNames := d.ExtractFileNames(files)
+				data, err := r.GenerateMap1(folder.Path, fileNames, exclusions)
+				if err != nil { // 에러 발생 시 종료
+					os.Exit(1)
+				}
+				// TODO ConvertMapToFileBlockData GenerateMap 에 통합 시켜도 됨. header 때문에.
+				// blockID 같은 경우는 폴더명으로 한다. 고유해야 함.
+				headers := []string{"r1", "r2"}
+				fbd := v1rpc.ConvertMapToFileBlockData(data, headers, "tester")
 
-			err = v1rpc.SaveProtoToFile("tester1.pb", fbd, 0777)
-			if err != nil {
-				os.Exit(1)
+				err = v1rpc.SaveProtoToFile("tester1.pb", fbd, 0777)
+				if err != nil {
+					os.Exit(1)
+				}
 			}
+
 		}
+
 	}
 
 	/*

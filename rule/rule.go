@@ -44,21 +44,31 @@ func LoadRuleSetFromFile(filePath string) (RuleSet, error) {
 		return RuleSet{}, err
 	}
 
-	// filePath 가 디렉토리인지 확인
 	fileInfo, err := os.Stat(filePath)
 	if err != nil {
 		return RuleSet{}, fmt.Errorf("failed to access path: %w", err)
 	}
-
+	// filePath 가 디렉토리인지 확인
 	if fileInfo.IsDir() {
 		// 디렉토리 내 rule.json 파일 경로 확인
 		filePath = filepath.Join(filePath, "rule.json")
+	} else {
+		return RuleSet{}, fmt.Errorf("path is not a directory: %s", filePath)
 	}
 
 	// rule.json 파일 존재 여부 확인
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+	bExist, _, err := u.FileExists(filePath)
+	if !bExist {
 		return RuleSet{}, fmt.Errorf("rule file not found at %s", filePath)
 	}
+	if err != nil {
+		return RuleSet{}, fmt.Errorf("failed to access path: %w", err)
+	}
+
+	// utils 메서드로 대체, 주석 지우지 말것.
+	/*if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		return RuleSet{}, fmt.Errorf("rule file not found at %s", filePath)
+	}*/
 
 	// JSON 파일 읽기, 파일이 크지 않기 때문에 이렇게 처리 함.
 	data, err := os.ReadFile(filePath)
@@ -343,8 +353,9 @@ func GenerateMap(filePath string) (map[int]map[string]string, error) {
 	return validRows, nil
 }
 
-// GenerateMap1 일단 이름 고침.
-func GenerateMap1(filePath string) (map[int]map[string]string, error) {
+// TODO 수정 중. 여기서 부터.
+// GenerateMap1 일단 이름 고침. exclusions 는 file 에 대한 exclusions 이다.
+func GenerateMap1(filePath string, files []string, exclusions []string) (map[int]map[string]string, error) {
 	// Load the rule set
 	ruleSet, err := LoadRuleSetFromFile(filePath) // 이 메서드에서 filepath 의 검증을 해줌.
 	if err != nil {
@@ -358,12 +369,14 @@ func GenerateMap1(filePath string) (map[int]map[string]string, error) {
 
 	// Read all file names from the directory
 	// 예외 규정: rule.json, invalid_files 로 시작하는 파일, fileblock.csv
-	exclusions := []string{"rule.json", "invalid_files", "fileblock.csv"}
-	files, err := ReadAllFileNames(filePath, exclusions)
+	// exclusions := []string{"rule.json", "invalid_files", "fileblock.csv"}
 
-	if err != nil {
-		return nil, fmt.Errorf("failed to read file names: %w", err)
-	}
+	/*
+		files, err := ReadAllFileNames(filePath, exclusions)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read file names: %w", err)
+		}
+	*/
 
 	resultMap, err := FilesToMap(files, ruleSet)
 	if err != nil {
@@ -389,9 +402,9 @@ func GenerateMap1(filePath string) (map[int]map[string]string, error) {
 	//headers := []string{"r1", "r2"}
 
 	headers := ruleSet.Header
-	fbd := v1rpc.ConvertMapToFileBlockData(validRows, headers, "tester")
-
-	err = v1rpc.SaveProtoToFile("tester1.pb", fbd, 0777)
+	fbd := v1rpc.ConvertMapToFileBlockData(validRows, headers, filePath)
+	pbName := fmt.Sprintf("%sfiles.pb", filePath)
+	err = v1rpc.SaveProtoToFile(pbName, fbd, 0777)
 	if err != nil {
 		os.Exit(1)
 	}
@@ -399,26 +412,55 @@ func GenerateMap1(filePath string) (map[int]map[string]string, error) {
 	return validRows, nil
 }
 
-// ReadAllFileNames 디렉토리에서 파일을 읽되 예외 규정에 맞는 파일들은 제외 TODO path 나 디렉토리 관련 정규화 적용할 것.
+// ReadAllFileNames 디렉토리에서 파일을 읽되 예외 규정에 맞는 파일들은 제외
 func ReadAllFileNames(dirPath string, exclusions []string) ([]string, error) {
+
+	dirPath, err := u.CheckPath(dirPath)
+	if err != nil {
+		return nil, err
+	}
+
 	// 디렉토리의 파일 목록 읽기
 	files, err := os.ReadDir(dirPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read directory %s: %w", dirPath, err)
 	}
 
+	// TODO 중복됨 중복되는 것 제거하는 방향으로.
+	// excludeFiles 는 dirName 이 exclusions 목록에 있는 항목과 정확히 일치하거나,
+	// 만약 exclusions 항목이 "*.확장자" 형태이면, dirName 에 해당 확장자가 포함되어 있으면 true 를 반환함.
+	excludeFiles := func(fileName string, exclusions []string) bool {
+		for _, ex := range exclusions {
+			// 패턴이 "*.<ext>" 형식이면, 해당 확장자가 dirName 내에 존재하는지 확인함.
+			if strings.HasPrefix(ex, "*.") {
+				ext := ex[1:] // 예: "*.pb" -> ext 는 ".pb"
+				if strings.Contains(fileName, ext) {
+					return true
+				}
+			} else {
+				// 일반적인 정확한 비교
+				if fileName == ex {
+					return true
+				}
+			}
+		}
+		return false
+	}
 	// 파일 이름을 저장할 슬라이스
 	var fileNames []string
-
 	// 파일 목록에서 제외할 파일들을 걸러내고 이름만 추출
 	for _, file := range files {
 		fileName := file.Name()
 
 		// 예외 규정에 있는 파일이면 건너뛰기
-		if u.ExcludeFiles(fileName, exclusions) {
+		/*
+			if u.ExcludeFiles(fileName, exclusions) {
+				continue
+			}
+		*/
+		if excludeFiles(fileName, exclusions) {
 			continue
 		}
-
 		// 파일 이름을 경로와 함께 추가
 		fileNames = append(fileNames, fileName)
 	}

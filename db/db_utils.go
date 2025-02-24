@@ -704,16 +704,16 @@ func GetFilesByPathFromDB(db *sql.DB, folderPath string) (files []File, err erro
 
 // CompareFolders 는 rootPath 밑의 서브 Folder 들의 통계를 디스크와 DB 에서 비교함.
 // 변경 사항이 없으면 true, 변경 사항이 있으면 false 와 함께 차이 정보를 반환함.
-func CompareFolders(db *sql.DB, rootPath string, foldersExclusions, filesExclusions []string) (bool, []FolderDiff, error) {
+func CompareFolders(db *sql.DB, rootPath string, foldersExclusions, filesExclusions []string) (bool, []Folder, []FolderDiff, error) {
 	// 디스크에서 서브 Folder 목록 조회
 	diskFolders, err := GetFoldersInfo(rootPath, foldersExclusions)
 	if err != nil {
-		return false, nil, fmt.Errorf("failed to get subfolders from disk: %w", err)
+		return false, nil, nil, fmt.Errorf("failed to get subfolders from disk: %w", err)
 	}
 	// DB 에서 Folder 정보 조회
 	dbFolders, err := GetFoldersFromDB(db)
 	if err != nil {
-		return false, nil, fmt.Errorf("failed to get folders from DB: %w", err)
+		return false, nil, nil, fmt.Errorf("failed to get folders from DB: %w", err)
 	}
 	// DB Folder 정보를 경로 기준으로 맵으로 구성
 	dbFolderMap := make(map[string]Folder)
@@ -726,7 +726,7 @@ func CompareFolders(db *sql.DB, rootPath string, foldersExclusions, filesExclusi
 	for _, diskFolder := range diskFolders {
 		updatedFolder, _, err := GetCurrentFolderFileInfo(diskFolder.Path, filesExclusions)
 		if err != nil {
-			return false, nil, fmt.Errorf("failed to get folder details for %s: %w", diskFolder.Path, err)
+			return false, nil, nil, fmt.Errorf("failed to get folder details for %s: %w", diskFolder.Path, err)
 		}
 		if dbFolder, ok := dbFolderMap[diskFolder.Path]; !ok {
 			// DB에 해당 Folder 정보가 없는 경우
@@ -750,21 +750,21 @@ func CompareFolders(db *sql.DB, rootPath string, foldersExclusions, filesExclusi
 		}
 	}
 	unchanged := len(diffs) == 0
-	return unchanged, diffs, nil
+	return unchanged, diskFolders, diffs, nil
 }
 
 // CompareFiles 는 특정 Folder 내의 파일 정보를 디스크와 DB 에서 비교함.
 // 파일 목록과 크기가 일치하면 true 를, 차이가 있으면 false 와 함께 어떤 파일이 변경되었는지(FileChange 목록) 반환함.
-func CompareFiles(db *sql.DB, folderPath string, filesExclusions []string) (bool, []FileChange, error) {
+func CompareFiles(db *sql.DB, folderPath string, filesExclusions []string) (bool, []File, []FileChange, error) {
 	// 디스크의 파일 정보 조회
 	_, diskFiles, err := GetCurrentFolderFileInfo(folderPath, filesExclusions)
 	if err != nil {
-		return false, nil, fmt.Errorf("failed to get folder details for %s: %w", folderPath, err)
+		return false, nil, nil, fmt.Errorf("failed to get folder details for %s: %w", folderPath, err)
 	}
 	// DB의 파일 정보 조회 (해당 Folder 에 해당하는)
 	dbFiles, err := GetFilesByPathFromDB(db, folderPath)
 	if err != nil {
-		return false, nil, fmt.Errorf("failed to get DB files for folder %s: %w", folderPath, err)
+		return false, nil, nil, fmt.Errorf("failed to get DB files for folder %s: %w", folderPath, err)
 	}
 
 	// 파일 이름을 키로 하는 맵 생성
@@ -811,7 +811,7 @@ func CompareFiles(db *sql.DB, folderPath string, filesExclusions []string) (bool
 		}
 	}
 	unchanged := len(changes) == 0
-	return unchanged, changes, nil
+	return unchanged, diskFiles, changes, nil
 }
 
 // CheckForeignKeysEnabled DB 연결에서 외래 키가 활성화되었는지 확인함.
@@ -830,4 +830,13 @@ func ClearDatabase(db *sql.DB) error {
 	// 외래 키 제약 조건이 ON DELETE CASCADE 로 설정되어 있다면, folders 테이블에서 데이터를 삭제하면 files 테이블의 데이터도 자동 삭제.
 	_, err := db.Exec("DELETE FROM folders;")
 	return err
+}
+
+// ExtractFileNames
+func ExtractFileNames(files []File) []string {
+	names := make([]string, 0, len(files))
+	for _, f := range files {
+		names = append(names, f.Name)
+	}
+	return names
 }
