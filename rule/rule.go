@@ -384,8 +384,9 @@ func GenerateMap1(filePath string) (map[int]map[string]string, error) {
 	}
 
 	// TODO ConvertMapToFileBlockData GenerateMap 에 통합 시켜도 됨. header 때문에.
+	// TODO 현재 수정 중
 	// blockID 같은 경우는 폴더명으로 한다. 고유해야 함.
-	headers := []string{"r1", "r2"}
+	//headers := []string{"r1", "r2"}
 
 	headers := ruleSet.Header
 	fbd := v1rpc.ConvertMapToFileBlockData(validRows, headers, "tester")
