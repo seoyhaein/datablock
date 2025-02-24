@@ -6,6 +6,8 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	c "github.com/seoyhaein/datablock/config"
 	d "github.com/seoyhaein/datablock/db"
+	r "github.com/seoyhaein/datablock/rule"
+	"github.com/seoyhaein/datablock/v1rpc"
 	"os"
 	"path"
 	"path/filepath"
@@ -52,16 +54,34 @@ func main() {
 
 	ctx := context.Background()
 	// TODO 메서드들을 모아주는 거 생각하자. 일단은 이렇게 해놓음. 향후 api 로 따로 빼놓아야 할듯. ConnectDB 는 기본으로 해주고 db 를 초기화하고 데이터를 넣어주는 api 를 따로 만들어 주어야 할듯.
-	exclusions := []string{"rule.json", "invalid_files", "fileblock.csv"}
-	err = d.StoreFoldersInfo(ctx, db, "/test/", exclusions)
+	// TODO 각 폴더별로 exclusions 이 다를 수 있음. 이거 고려되어야 함. -> 동일해진거 같은데 생각해보자.
+	// TODO 아래 폴더들을 생각해서 일단 작성하자.
+	exclusions := []string{"*.json", "invalid_files", "*.csv", "*.pb"}
+
+	err = d.StoreFoldersInfo(ctx, db, "/test/", nil, exclusions)
 	if err != nil {
 		fmt.Println("StoreFoldersInfo Error")
 	}
-	bSame, _, err := d.CompareFolders(db, config.RootDir, exclusions)
+
+	bSame, _, err := d.CompareFolders(db, config.RootDir, nil, exclusions)
 	if bSame {
 		bSame, _, err = d.CompareFiles(db, "/test", exclusions)
 		if bSame {
 			fmt.Println("Same")
+
+			data, err := r.GenerateMap("/test/baba/")
+			if err != nil { // 에러 발생 시 종료
+				os.Exit(1)
+			}
+			// TODO ConvertMapToFileBlockData GenerateMap 에 통합 시켜도 됨. header 때문에.
+			// blockID 같은 경우는 폴더명으로 한다. 고유해야 함.
+			headers := []string{"r1", "r2"}
+			fbd := v1rpc.ConvertMapToFileBlockData(data, headers, "tester")
+
+			err = v1rpc.SaveProtoToFile("tester1.pb", fbd, 0777)
+			if err != nil {
+				os.Exit(1)
+			}
 		}
 	}
 

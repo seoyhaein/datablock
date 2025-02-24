@@ -405,16 +405,16 @@ func StoreFilesFolderInfo(ctx context.Context, db *sql.DB, folderPath string, ex
 }
 
 // StoreFoldersInfo rootPath 하위의 모든 Folder 에 대해 파일 정보를 DB에 삽입함.
-func StoreFoldersInfo(ctx context.Context, db *sql.DB, rootPath string, exclusions []string) error {
+func StoreFoldersInfo(ctx context.Context, db *sql.DB, rootPath string, foldersExclusions, filesExclusions []string) error {
 	// rootPath 하위의 Folder 목록 조회
-	folders, err := GetSubFolders(rootPath, exclusions)
+	folders, err := GetSubFolders(rootPath, foldersExclusions)
 	if err != nil {
 		return fmt.Errorf("failed to get subfolders from %s: %w", rootPath, err)
 	}
 
 	// 각 서브 Folder 에 대해 파일 정보를 DB에 삽입
 	for _, folder := range folders {
-		err = StoreFilesFolderInfo(ctx, db, folder.Path, exclusions)
+		err = StoreFilesFolderInfo(ctx, db, folder.Path, filesExclusions)
 		if err != nil {
 			return fmt.Errorf("failed to load files info for folder %s: %w", folder.Path, err)
 		}
@@ -440,17 +440,40 @@ func GetCurrentFolderFileInfo(dirPath string, exclusions []string) (Folder, []Fi
 	totalSize := int64(0)
 	fileCount := int64(0)
 
+	// excludeFiles 는 dirName 이 exclusions 목록에 있는 항목과 정확히 일치하거나,
+	// 만약 exclusions 항목이 "*.확장자" 형태이면, dirName 에 해당 확장자가 포함되어 있으면 true 를 반환함.
+	excludeFiles := func(fileName string, exclusions []string) bool {
+		for _, ex := range exclusions {
+			// 패턴이 "*.<ext>" 형식이면, 해당 확장자가 dirName 내에 존재하는지 확인함.
+			if strings.HasPrefix(ex, "*.") {
+				ext := ex[1:] // 예: "*.pb" -> ext 는 ".pb"
+				if strings.Contains(fileName, ext) {
+					return true
+				}
+			} else {
+				// 일반적인 정확한 비교
+				if fileName == ex {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
 	// 각 엔트리(파일)에 대해 처리
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue // 하위 디렉토리는 무시
 		}
-
 		fileName := entry.Name()
+
 		// 제외 목록에 있는 파일이면 건너뛰기
-		if u.ExcludeFiles(fileName, exclusions) {
+		if excludeFiles(fileName, exclusions) {
 			continue
 		}
+		/*if u.ExcludeFiles(fileName, exclusions) {
+			continue
+		}*/
 
 		// 파일 전체 경로 생성
 		filePath := filepath.Join(dirPath, fileName)
@@ -500,7 +523,7 @@ func GetSubFolders(rootPath string, exclusions []string) ([]Folder, error) {
 		return nil, fmt.Errorf("failed to read directory %s: %w", rootPath, err)
 	}
 
-	// 디렉토리 이름을 비교하여 제외할지 결정하는 헬퍼 함수 TODO utils 에 넣어야 함. 일단은 헬퍼 함수로 남겨둠.
+	// 디렉토리 이름을 비교하여 제외할지 결정하는 헬퍼 함수
 	excludeDir := func(dirName string, exclusions []string) bool {
 		for _, ex := range exclusions {
 			// 디렉토리 이름이 정확히 일치하는 경우 제외
@@ -681,9 +704,9 @@ func GetFilesByPathFromDB(db *sql.DB, folderPath string) (files []File, err erro
 
 // CompareFolders 는 rootPath 밑의 서브 Folder 들의 통계를 디스크와 DB 에서 비교함.
 // 변경 사항이 없으면 true, 변경 사항이 있으면 false 와 함께 차이 정보를 반환함.
-func CompareFolders(db *sql.DB, rootPath string, exclusions []string) (bool, []FolderDiff, error) {
+func CompareFolders(db *sql.DB, rootPath string, foldersExclusions, filesExclusions []string) (bool, []FolderDiff, error) {
 	// 디스크에서 서브 Folder 목록 조회
-	diskFolders, err := GetFoldersInfo(rootPath, exclusions)
+	diskFolders, err := GetFoldersInfo(rootPath, foldersExclusions)
 	if err != nil {
 		return false, nil, fmt.Errorf("failed to get subfolders from disk: %w", err)
 	}
@@ -701,7 +724,7 @@ func CompareFolders(db *sql.DB, rootPath string, exclusions []string) (bool, []F
 	var diffs []FolderDiff
 	// 디스크의 각 Folder 에 대해 파일 통계를 갱신한 후 DB와 비교
 	for _, diskFolder := range diskFolders {
-		updatedFolder, _, err := GetCurrentFolderFileInfo(diskFolder.Path, exclusions)
+		updatedFolder, _, err := GetCurrentFolderFileInfo(diskFolder.Path, filesExclusions)
 		if err != nil {
 			return false, nil, fmt.Errorf("failed to get folder details for %s: %w", diskFolder.Path, err)
 		}
@@ -732,9 +755,9 @@ func CompareFolders(db *sql.DB, rootPath string, exclusions []string) (bool, []F
 
 // CompareFiles 는 특정 Folder 내의 파일 정보를 디스크와 DB 에서 비교함.
 // 파일 목록과 크기가 일치하면 true 를, 차이가 있으면 false 와 함께 어떤 파일이 변경되었는지(FileChange 목록) 반환함.
-func CompareFiles(db *sql.DB, folderPath string, exclusions []string) (bool, []FileChange, error) {
+func CompareFiles(db *sql.DB, folderPath string, filesExclusions []string) (bool, []FileChange, error) {
 	// 디스크의 파일 정보 조회
-	_, diskFiles, err := GetCurrentFolderFileInfo(folderPath, exclusions)
+	_, diskFiles, err := GetCurrentFolderFileInfo(folderPath, filesExclusions)
 	if err != nil {
 		return false, nil, fmt.Errorf("failed to get folder details for %s: %w", folderPath, err)
 	}

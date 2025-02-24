@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"github.com/seoyhaein/datablock/v1rpc"
 	u "github.com/seoyhaein/utils"
 	"log"
 	"os"
@@ -337,6 +338,61 @@ func GenerateMap(filePath string) (map[int]map[string]string, error) {
 	// Save invalid rows to a separate file
 	if err := WriteInvalidFiles(invalidRows, filePath); err != nil {
 		return nil, fmt.Errorf("failed to write invalid files: %w", err)
+	}
+
+	return validRows, nil
+}
+
+// GenerateMap1 일단 이름 고침.
+func GenerateMap1(filePath string) (map[int]map[string]string, error) {
+	// Load the rule set
+	ruleSet, err := LoadRuleSetFromFile(filePath) // 이 메서드에서 filepath 의 검증을 해줌.
+	if err != nil {
+		return nil, fmt.Errorf("failed to load rule set: %w", err)
+	}
+
+	// Validate the rule set
+	if !ValidateRuleSet(ruleSet) {
+		return nil, fmt.Errorf("rule set has conflicts or unused parts")
+	}
+
+	// Read all file names from the directory
+	// 예외 규정: rule.json, invalid_files 로 시작하는 파일, fileblock.csv
+	exclusions := []string{"rule.json", "invalid_files", "fileblock.csv"}
+	files, err := ReadAllFileNames(filePath, exclusions)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file names: %w", err)
+	}
+
+	resultMap, err := FilesToMap(files, ruleSet)
+	if err != nil {
+		return nil, fmt.Errorf("failed to blockify files: %w", err)
+	}
+
+	// Filter the result map into valid and invalid rows
+	validRows, invalidRows := FilterMap(resultMap, len(ruleSet.Header))
+
+	// Save valid rows to a CSV file
+	if err := SaveResultMapToCSV(filePath, validRows, ruleSet.Header); err != nil {
+		return nil, fmt.Errorf("failed to save result map to CSV: %w", err)
+	}
+
+	// Save invalid rows to a separate file
+	if err := WriteInvalidFiles(invalidRows, filePath); err != nil {
+		return nil, fmt.Errorf("failed to write invalid files: %w", err)
+	}
+
+	// TODO ConvertMapToFileBlockData GenerateMap 에 통합 시켜도 됨. header 때문에.
+	// blockID 같은 경우는 폴더명으로 한다. 고유해야 함.
+	headers := []string{"r1", "r2"}
+
+	headers := ruleSet.Header
+	fbd := v1rpc.ConvertMapToFileBlockData(validRows, headers, "tester")
+
+	err = v1rpc.SaveProtoToFile("tester1.pb", fbd, 0777)
+	if err != nil {
+		os.Exit(1)
 	}
 
 	return validRows, nil

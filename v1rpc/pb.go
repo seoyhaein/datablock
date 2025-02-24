@@ -145,7 +145,7 @@ func ConvertMapToFileBlockData(rows map[int]map[string]string, headers []string,
 		Rows:          make([]*pb.Row, 0, len(rows)),
 	}
 
-	// rowIndex를 정렬해 순차적으로 처리
+	// rowIndex 를 정렬해 순차적으로 처리
 	rowIndices := make([]int, 0, len(rows))
 	for idx := range rows {
 		rowIndices = append(rowIndices, idx)
