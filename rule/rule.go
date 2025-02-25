@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"github.com/seoyhaein/datablock/protos"
 	"github.com/seoyhaein/datablock/v1rpc"
 	u "github.com/seoyhaein/utils"
 	"log"
@@ -232,24 +233,24 @@ func ValidateRuleSet(ruleSet RuleSet) bool {
 }
 
 // SaveResultMapToCSV map[int]map[string]string 데이터를 CSV 파일로 저장, TODO 파일 생성날짜를 기록할지 생각, readonly 로 하는 것 생각.
-func SaveResultMapToCSV(filePath string, resultMap map[int]map[string]string, headers []string) (err error) {
-	filePath, err = u.CheckPath(filePath)
+func SaveResultMapToCSV(resultMap map[int]map[string]string, headers []string, outputFilePath string) (err error) {
+	outputFilePath, err = u.CheckPath(outputFilePath)
 	if err != nil {
 		return err
 	}
 
 	// filePath 가 디렉토리인지 확인
-	fileInfo, err := os.Stat(filePath)
+	fileInfo, err := os.Stat(outputFilePath)
 	if err != nil {
 		return fmt.Errorf("failed to access path: %w", err)
 	}
 
 	if fileInfo.IsDir() {
 		// 디렉토리 경로에 fileblock.csv 파일 생성
-		filePath = filepath.Join(filePath, "fileblock.csv")
+		outputFilePath = filepath.Join(outputFilePath, "fileblock.csv")
 	}
 
-	file, err := os.Create(filePath)
+	file, err := os.Create(outputFilePath)
 	if err != nil {
 		return fmt.Errorf("failed to create file: %w", err)
 	}
@@ -341,7 +342,7 @@ func GenerateMap(filePath string) (map[int]map[string]string, error) {
 	validRows, invalidRows := FilterMap(resultMap, len(ruleSet.Header))
 
 	// Save valid rows to a CSV file
-	if err := SaveResultMapToCSV(filePath, validRows, ruleSet.Header); err != nil {
+	if err := SaveResultMapToCSV(validRows, ruleSet.Header, filePath); err != nil {
 		return nil, fmt.Errorf("failed to save result map to CSV: %w", err)
 	}
 
@@ -353,9 +354,8 @@ func GenerateMap(filePath string) (map[int]map[string]string, error) {
 	return validRows, nil
 }
 
-// TODO 수정 중. 여기서 부터.
-// GenerateMap1 일단 이름 고침. exclusions 는 file 에 대한 exclusions 이다.
-func GenerateMap1(filePath string, files []string, exclusions []string) (map[int]map[string]string, error) {
+// GenerateFileBlock 일단 이름 고침. filePath 는 rule.josn 이 있는 위치이자 fileblock.csv, invalid_files, *.pb 파일 등이 가 저장될 위치.
+func GenerateFileBlock(filePath string, files []string) (*protos.FileBlockData, error) {
 	// Load the rule set
 	ruleSet, err := LoadRuleSetFromFile(filePath) // 이 메서드에서 filepath 의 검증을 해줌.
 	if err != nil {
@@ -367,27 +367,16 @@ func GenerateMap1(filePath string, files []string, exclusions []string) (map[int
 		return nil, fmt.Errorf("rule set has conflicts or unused parts")
 	}
 
-	// Read all file names from the directory
-	// 예외 규정: rule.json, invalid_files 로 시작하는 파일, fileblock.csv
-	// exclusions := []string{"rule.json", "invalid_files", "fileblock.csv"}
-
-	/*
-		files, err := ReadAllFileNames(filePath, exclusions)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read file names: %w", err)
-		}
-	*/
-
 	resultMap, err := FilesToMap(files, ruleSet)
 	if err != nil {
 		return nil, fmt.Errorf("failed to blockify files: %w", err)
 	}
 
-	// Filter the result map into valid and invalid rows
+	// Filter the result map into valid and invalid rows. 열의 갯수 기준으로 유효/무효 행을 분리
 	validRows, invalidRows := FilterMap(resultMap, len(ruleSet.Header))
 
-	// Save valid rows to a CSV file
-	if err := SaveResultMapToCSV(filePath, validRows, ruleSet.Header); err != nil {
+	// Save valid rows to a CSV file. 사용자에게 보여주기 위함.
+	if err := SaveResultMapToCSV(validRows, ruleSet.Header, filePath); err != nil {
 		return nil, fmt.Errorf("failed to save result map to CSV: %w", err)
 	}
 
@@ -396,20 +385,15 @@ func GenerateMap1(filePath string, files []string, exclusions []string) (map[int
 		return nil, fmt.Errorf("failed to write invalid files: %w", err)
 	}
 
-	// TODO ConvertMapToFileBlockData GenerateMap 에 통합 시켜도 됨. header 때문에.
-	// TODO 현재 수정 중
-	// blockID 같은 경우는 폴더명으로 한다. 고유해야 함.
-	//headers := []string{"r1", "r2"}
-
-	headers := ruleSet.Header
-	fbd := v1rpc.ConvertMapToFileBlockData(validRows, headers, filePath)
-	pbName := fmt.Sprintf("%sfiles.pb", filePath)
+	// blockId 를 filePath 로 잡아둠.
+	fbd := v1rpc.ConvertMapToFileBlockData(validRows, ruleSet.Header, filePath)
+	pbName := filepath.Join(filePath, fmt.Sprintf("%sfiles.pb", filepath.Base(filePath)))
 	err = v1rpc.SaveProtoToFile(pbName, fbd, 0777)
 	if err != nil {
-		os.Exit(1)
+		return nil, fmt.Errorf("failed to save proto to file: %w", err)
 	}
 
-	return validRows, nil
+	return fbd, nil
 }
 
 // ReadAllFileNames 디렉토리에서 파일을 읽되 예외 규정에 맞는 파일들은 제외
