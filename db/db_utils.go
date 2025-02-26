@@ -825,7 +825,7 @@ func CheckForeignKeysEnabled(db *sql.DB) (bool, error) {
 	return fk == 1, nil
 }
 
-// for test
+// ClearDatabase for test
 func ClearDatabase(db *sql.DB) error {
 	// 외래 키 제약 조건이 ON DELETE CASCADE 로 설정되어 있다면, folders 테이블에서 데이터를 삭제하면 files 테이블의 데이터도 자동 삭제.
 	_, err := db.Exec("DELETE FROM folders;")

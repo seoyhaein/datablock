@@ -14,7 +14,7 @@ import (
 
 func main() {
 
-	_ = RemoveDBFile("file_monitor.db")
+	//_ = RemoveDBFile("file_monitor.db")
 	// db connection foreign key 설정을 위해 PRAGMA foreign_keys = ON; 설정을 해줘야 함.
 	db, err := d.ConnectDB("sqlite3", "file_monitor.db", true)
 	if err != nil {
