@@ -162,11 +162,12 @@ type Folder struct {
 	Path        string `db:"path"`
 	TotalSize   int64  `db:"total_size"`
 	FileCount   int64  `db:"file_count"`
-	CreatedTime string `db:"created_time"` // sting 으로 해도 충분
+	CreatedTime string `db:"created_time"` // string 으로 해도 충분
 }
 
 // FolderDiff 는 디스크와 DB의 Folder 통계가 다른 경우의 차이를 나타냄.
 type FolderDiff struct {
+	FolderID      int64  // DB에 있는 폴더의 ID (없으면 0)
 	Path          string // Folder 경로
 	DiskTotalSize int64  // 디스크상의 총 크기
 	DBTotalSize   int64  // DB에 저장된 총 크기
@@ -177,9 +178,12 @@ type FolderDiff struct {
 // FileChange 는 특정 Folder 내에서 디스크와 DB의 파일 정보가 다를 경우 그 차이를 나타냄.
 type FileChange struct {
 	ChangeType string // "added", "removed", "modified"
-	Name       string // 파일 이름
-	DiskSize   int64  // 디스크상의 파일 크기
-	DBSize     int64  // DB에 저장된 파일 크기
+	// DB에 이미 존재하는 파일의 경우 FileID와 FolderID를 기록합니다.
+	FileID   int64
+	FolderID int64
+	Name     string // 파일 이름
+	DiskSize int64  // 디스크상의 파일 크기
+	DBSize   int64  // DB에 저장된 파일 크기 (추가된 경우 0)
 }
 
 // db 관련
@@ -702,35 +706,38 @@ func GetFilesByPathFromDB(db *sql.DB, folderPath string) (files []File, err erro
 
 // 비교 메서드
 
-// CompareFolders 는 rootPath 밑의 서브 Folder 들의 통계를 디스크와 DB 에서 비교함.
-// 변경 사항이 없으면 true, 변경 사항이 있으면 false 와 함께 차이 정보를 반환함.
+// CompareFolders 디스크와 DB의 폴더 정보를 비교하여 변경 사항이 있는지 확인함.
 func CompareFolders(db *sql.DB, rootPath string, foldersExclusions, filesExclusions []string) (bool, []Folder, []FolderDiff, error) {
-	// 디스크에서 서브 Folder 목록 조회
+	// 디스크에서 서브 폴더 목록 조회
 	diskFolders, err := GetFoldersInfo(rootPath, foldersExclusions)
 	if err != nil {
 		return false, nil, nil, fmt.Errorf("failed to get subfolders from disk: %w", err)
 	}
-	// DB 에서 Folder 정보 조회
+
+	// DB에서 폴더 정보 조회
 	dbFolders, err := GetFoldersFromDB(db)
 	if err != nil {
 		return false, nil, nil, fmt.Errorf("failed to get folders from DB: %w", err)
 	}
-	// DB Folder 정보를 경로 기준으로 맵으로 구성
+
+	// DB 폴더 정보를 경로 기준으로 맵으로 구성 (폴더 경로를 키로 사용)
 	dbFolderMap := make(map[string]Folder)
-	for _, f := range dbFolders {
-		dbFolderMap[f.Path] = f
+	for _, folder := range dbFolders {
+		dbFolderMap[folder.Path] = folder
 	}
 
 	var diffs []FolderDiff
-	// 디스크의 각 Folder 에 대해 파일 통계를 갱신한 후 DB와 비교
+	// 디스크의 각 폴더에 대해 파일 통계를 갱신한 후 DB와 비교
 	for _, diskFolder := range diskFolders {
 		updatedFolder, _, err := GetCurrentFolderFileInfo(diskFolder.Path, filesExclusions)
 		if err != nil {
 			return false, nil, nil, fmt.Errorf("failed to get folder details for %s: %w", diskFolder.Path, err)
 		}
+
 		if dbFolder, ok := dbFolderMap[diskFolder.Path]; !ok {
-			// DB에 해당 Folder 정보가 없는 경우
+			// DB에 해당 폴더 정보가 없는 경우 FolderID를 0으로 처리
 			diffs = append(diffs, FolderDiff{
+				FolderID:      0,
 				Path:          diskFolder.Path,
 				DiskTotalSize: updatedFolder.TotalSize,
 				DBTotalSize:   0,
@@ -738,8 +745,10 @@ func CompareFolders(db *sql.DB, rootPath string, foldersExclusions, filesExclusi
 				DBFileCount:   0,
 			})
 		} else {
+			// DB에 해당 폴더 정보가 있는 경우
 			if updatedFolder.TotalSize != dbFolder.TotalSize || updatedFolder.FileCount != dbFolder.FileCount {
 				diffs = append(diffs, FolderDiff{
+					FolderID:      dbFolder.ID,
 					Path:          diskFolder.Path,
 					DiskTotalSize: updatedFolder.TotalSize,
 					DBTotalSize:   dbFolder.TotalSize,
@@ -749,12 +758,12 @@ func CompareFolders(db *sql.DB, rootPath string, foldersExclusions, filesExclusi
 			}
 		}
 	}
+
 	unchanged := len(diffs) == 0
 	return unchanged, diskFolders, diffs, nil
 }
 
-// CompareFiles 는 특정 Folder 내의 파일 정보를 디스크와 DB 에서 비교함.
-// 파일 목록과 크기가 일치하면 true 를, 차이가 있으면 false 와 함께 어떤 파일이 변경되었는지(FileChange 목록) 반환함.
+// CompareFiles  파일 비교.
 func CompareFiles(db *sql.DB, folderPath string, filesExclusions []string) (bool, []File, []FileChange, error) {
 	// 디스크의 파일 정보 조회
 	_, diskFiles, err := GetCurrentFolderFileInfo(folderPath, filesExclusions)
@@ -767,7 +776,7 @@ func CompareFiles(db *sql.DB, folderPath string, filesExclusions []string) (bool
 		return false, nil, nil, fmt.Errorf("failed to get DB files for folder %s: %w", folderPath, err)
 	}
 
-	// 파일 이름을 키로 하는 맵 생성
+	// 파일 이름을 키로 하는 맵 생성 (디스크와 DB 각각)
 	diskMap := make(map[string]File)
 	for _, f := range diskFiles {
 		diskMap[f.Name] = f
@@ -783,6 +792,8 @@ func CompareFiles(db *sql.DB, folderPath string, filesExclusions []string) (bool
 		if dbF, ok := dbMap[name]; !ok {
 			changes = append(changes, FileChange{
 				ChangeType: "added",
+				FileID:     0,              // 신규 추가이므로 ID 없음
+				FolderID:   diskF.FolderID, // 폴더 정보는 디스크 정보에서 가져옴 (또는 상위 로직에서 결정)
 				Name:       name,
 				DiskSize:   diskF.Size,
 				DBSize:     0,
@@ -792,6 +803,8 @@ func CompareFiles(db *sql.DB, folderPath string, filesExclusions []string) (bool
 			if diskF.Size != dbF.Size {
 				changes = append(changes, FileChange{
 					ChangeType: "modified",
+					FileID:     dbF.ID,
+					FolderID:   dbF.FolderID,
 					Name:       name,
 					DiskSize:   diskF.Size,
 					DBSize:     dbF.Size,
@@ -804,6 +817,8 @@ func CompareFiles(db *sql.DB, folderPath string, filesExclusions []string) (bool
 		if _, ok := diskMap[name]; !ok {
 			changes = append(changes, FileChange{
 				ChangeType: "removed",
+				FileID:     dbF.ID,
+				FolderID:   dbF.FolderID,
 				Name:       name,
 				DiskSize:   0,
 				DBSize:     dbF.Size,
@@ -813,6 +828,40 @@ func CompareFiles(db *sql.DB, folderPath string, filesExclusions []string) (bool
 	unchanged := len(changes) == 0
 	return unchanged, diskFiles, changes, nil
 }
+
+// ApplyFileChangeToDB TODO 이름 너무 김.
+func ApplyFileChangeToDB(ctx context.Context, db *sql.DB, fc FileChange) error {
+	switch fc.ChangeType {
+	case "added":
+		if err := execSQL(ctx, db, "insert_file.sql", fc.FolderID, fc.Name, fc.DiskSize); err != nil {
+			return fmt.Errorf("failed to insert file %s: %w", fc.Name, err)
+		}
+	case "modified":
+		if err := execSQL(ctx, db, "update_file.sql", fc.DiskSize, fc.FileID); err != nil {
+			return fmt.Errorf("failed to update file %s: %w", fc.Name, err)
+		}
+	case "removed":
+		if err := execSQL(ctx, db, "delete_file.sql", fc.FileID); err != nil {
+			return fmt.Errorf("failed to delete file %s: %w", fc.Name, err)
+		}
+	default:
+		return fmt.Errorf("unknown change type: %s", fc.ChangeType)
+	}
+	return nil
+}
+
+// ApplyFileChangesToDB TODO 이름 너무 김.
+func ApplyFileChangesToDB(ctx context.Context, db *sql.DB, changes []FileChange) error {
+	for _, change := range changes {
+		if err := ApplyFileChangeToDB(ctx, db, change); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// TODO
+// folder 를 먼저 file 을 먼저.???
 
 // CheckForeignKeysEnabled DB 연결에서 외래 키가 활성화되었는지 확인함.
 // IMPORTANT: fk 값이 1이면 외래 키가 활성화된 상태임.

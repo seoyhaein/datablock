@@ -58,7 +58,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// TODO 같지 않을때 처리 해줘야 함.
+	// TODO 같지 않을때 처리 해줘야 함. db 를 업데이트 해줘야 함.
 	_, err = dbApis.CompareFoldersAndFiles(ctx, db)
 	if err != nil {
 		os.Exit(1)

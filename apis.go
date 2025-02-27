@@ -17,7 +17,7 @@ import (
 // DBApis 데이터베이스와 관련된 인터페이스
 type DBApis interface {
 	StoreFoldersInfo(ctx context.Context, db *sql.DB) error
-	CompareFoldersAndFiles(ctx context.Context, db *sql.DB) (bool, error)
+	CompareFoldersAndFiles(ctx context.Context, db *sql.DB) (*bool, error)
 }
 
 // dBApisImpl DBApis 인터페이스의 구현체
@@ -43,14 +43,14 @@ func (f *dBApisImpl) StoreFoldersInfo(ctx context.Context, db *sql.DB) error {
 }
 
 // CompareFoldersAndFiles TODO 이거 생각할 거 많음. 같지 않을때 어떻게 처리할지 생각해야함. 같지 않을때는 db 를 업데이트 해야 할 거 같음.
-func (f *dBApisImpl) CompareFoldersAndFiles(ctx context.Context, db *sql.DB) (bool, error) {
+func (f *dBApisImpl) CompareFoldersAndFiles(ctx context.Context, db *sql.DB) (*bool, error) {
 	// 폴더 비교: foldersMatch, folders, <unused>, err
 	foldersMatch, folders, _, err := d.CompareFolders(db, f.rootDir, f.foldersExclusion, f.filesExclusions)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	if !foldersMatch {
-		return false, nil
+		return u.PFalse, nil
 	}
 
 	// 각 폴더별 처리
@@ -58,16 +58,16 @@ func (f *dBApisImpl) CompareFoldersAndFiles(ctx context.Context, db *sql.DB) (bo
 		// 먼저, 해당 폴더 내 파일들을 비교
 		filesMatch, files, _, err := d.CompareFiles(db, folder.Path, f.filesExclusions)
 		if err != nil {
-			return false, err
+			return nil, err
 		}
 		if !filesMatch {
-			return false, nil
+			return u.PFalse, nil
 		}
 
 		// 파일과 폴더가 동일한 경우, 특수 파일 존재 여부를 확인
 		special, err := SpecialFilesExist(folder.Path)
 		if err != nil {
-			return false, err
+			return nil, err
 		}
 		// 특수 파일이 이미 존재하면 새로 생성할 필요가 없으므로 건너뜀
 		if special != nil && *special {
@@ -77,10 +77,10 @@ func (f *dBApisImpl) CompareFoldersAndFiles(ctx context.Context, db *sql.DB) (bo
 		// 특수 파일이 없으면, 파일 목록을 추출하고 GenerateFileBlock 실행
 		fileNames := d.ExtractFileNames(files)
 		if _, err := r.GenerateFileBlock(folder.Path, fileNames); err != nil {
-			return false, err
+			return nil, err
 		}
 	}
-	return true, nil
+	return u.PTrue, nil
 }
 
 // SpecialFilesExist 파일이 하나라도 있으면 PTrue, 모두 없으면 PFalse, 에러 발생 시 nil 반환
