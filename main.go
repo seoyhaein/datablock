@@ -6,7 +6,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	c "github.com/seoyhaein/datablock/config"
 	d "github.com/seoyhaein/datablock/db"
-	r "github.com/seoyhaein/datablock/rule"
 	"os"
 	"path"
 	"path/filepath"
@@ -20,7 +19,7 @@ func main() {
 	if err != nil {
 		os.Exit(1)
 	}
-	err = d.InitializeDatabase(db) // TODO 향후 api 로 따로 빼놓아야 할듯. ConnectDB 는 기본으로 해주고 db 를 초기화하고 데이터를 넣어주는 api 를 따로 만들어 주어야 할듯.
+	err = d.InitializeDatabase(db)
 	if err != nil {
 		os.Exit(1)
 	}
@@ -50,32 +49,21 @@ func main() {
 	d.MakeTestFilesA("/test/baba/")
 
 	ctx := context.Background()
-	// TODO 메서드들을 모아주는 거 생각하자. 일단은 이렇게 해놓음. 향후 api 로 따로 빼놓아야 할듯. ConnectDB 는 기본으로 해주고 db 를 초기화하고 데이터를 넣어주는 api 를 따로 만들어 주어야 할듯.
+	// exclusion 은 보안상 여기다가 넣어둠. TODO 일단 생각은 해보자.
 	exclusions := []string{"*.json", "invalid_files", "*.csv", "*.pb"}
-
-	err = d.StoreFoldersInfo(ctx, db, config.RootDir, nil, exclusions)
+	dbApis := NewDBApis(config.RootDir, nil, exclusions)
+	err = dbApis.StoreFoldersInfo(ctx, db)
 	if err != nil {
-		fmt.Println("StoreFoldersInfo Error")
+
+		os.Exit(1)
 	}
 
-	// TODO api 로 만들어 두어야 함.
-	bSame, folders, _, err := d.CompareFolders(db, config.RootDir, nil, exclusions)
-	if bSame {
-		for _, folder := range folders {
-			bSame, files, _, _ := d.CompareFiles(db, folder.Path, exclusions)
-			if bSame {
-				fmt.Println("Same")
-
-				fileNames := d.ExtractFileNames(files)
-				_, err := r.GenerateFileBlock(folder.Path, fileNames)
-
-				if err != nil { // 에러 발생 시 종료
-					os.Exit(1)
-				}
-			}
-
-		}
+	// TODO 같지 않을때 처리 해줘야 함.
+	_, err = dbApis.CompareFoldersAndFiles(ctx, db)
+	if err != nil {
+		os.Exit(1)
 	}
+
 }
 
 // RemoveDBFile 주어진 DB 파일을 삭제함.
