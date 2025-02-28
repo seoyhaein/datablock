@@ -13,6 +13,7 @@ import (
 
 func main() {
 
+	// 테스트 용도
 	//_ = RemoveDBFile("file_monitor.db")
 	// db connection foreign key 설정을 위해 PRAGMA foreign_keys = ON; 설정을 해줘야 함.
 	db, err := d.ConnectDB("sqlite3", "file_monitor.db", true)
@@ -67,10 +68,13 @@ func main() {
 		// 전체 폴더와 파일이 동일한 경우 (b가 true)
 		fmt.Println("모든 폴더와 파일이 동일합니다.")
 		// 여기서 fileBlocks 등 추가 처리를 할 수 있습니다.
-	} else {
+	} else if b != nil && !*b {
 		if err = UpdateFilesAndFolders(ctx, db, fDiff, fChange); err != nil {
 			os.Exit(1)
 		}
+	} else {
+		// err 가 not nil 이면 b 는 nil 임. 중복됨.
+		os.Exit(1)
 	}
 	// fileblock 을 merge 해서 datablcok 으로 만들고 이후 파일로 저장함.
 	if err = SaveDataBlock(fb, config.RootDir); err != nil {
