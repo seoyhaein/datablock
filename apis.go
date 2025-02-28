@@ -8,6 +8,7 @@ import (
 	d "github.com/seoyhaein/datablock/db"
 	"github.com/seoyhaein/datablock/protos"
 	r "github.com/seoyhaein/datablock/rule"
+	"github.com/seoyhaein/datablock/v1rpc"
 	u "github.com/seoyhaein/utils"
 	"os"
 	"path/filepath"
@@ -37,7 +38,9 @@ func NewDBApis(rootDir string, foldersExclusion, filesExclusions []string) DBApi
 	}
 }
 
-// StoreFoldersInfo TODO 향후 grpc api 들어갈 예정.
+// TODO 향후 grpc api 들어갈 예정.
+
+// StoreFoldersInfo 폴더 정보를 DB에 저장
 func (f *dBApisImpl) StoreFoldersInfo(ctx context.Context, db *sql.DB) error {
 	err := d.StoreFoldersInfo(ctx, db, f.rootDir, f.foldersExclusion, f.filesExclusions)
 	return err
@@ -127,4 +130,32 @@ func SpecialFilesExist(folder string) (*bool, error) {
 	}
 
 	return u.PFalse, nil
+}
+
+// UpdateFilesAndFolders 폴더 변경 내역과 파일 변경 내역을 DB에 반영
+func UpdateFilesAndFolders(ctx context.Context, db *sql.DB, diffs []d.FolderDiff, changes []d.FileChange) error {
+	// 폴더 변경 업데이트
+	if err := d.UpsertFolders(ctx, db, diffs); err != nil {
+		return err
+	}
+	// 파일 변경 업데이트
+	if err := d.UpsertDelFiles(ctx, db, changes); err != nil {
+		return err
+	}
+	return nil
+}
+
+func SaveDataBlock(inputBlocks []*protos.FileBlockData, outputFile string) error {
+	dataBlock, err := v1rpc.MergeFileBlocksFromData(inputBlocks)
+	if err != nil {
+		return err
+	}
+
+	// DataBlock 저장
+	if err := v1rpc.SaveProtoToFile(outputFile, dataBlock, os.ModePerm); err != nil {
+		return fmt.Errorf("failed to save DataBlock: %w", err)
+	}
+
+	fmt.Printf("Successfully merged %d FileBlock files into %s\n", len(inputBlocks), outputFile)
+	return nil
 }

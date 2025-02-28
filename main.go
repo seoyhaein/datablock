@@ -58,9 +58,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	// TODO 같지 않을때 처리 해줘야 함. db 를 업데이트 해줘야 함.
-	_, _, _, _, err = dbApis.CompareFoldersAndFiles(ctx, db)
+	b, fDiff, fChange, fb, err := dbApis.CompareFoldersAndFiles(ctx, db)
 	if err != nil {
+		os.Exit(1)
+	}
+
+	if b != nil && *b {
+		// 전체 폴더와 파일이 동일한 경우 (b가 true)
+		fmt.Println("모든 폴더와 파일이 동일합니다.")
+		// 여기서 fileBlocks 등 추가 처리를 할 수 있습니다.
+	} else {
+		if err = UpdateFilesAndFolders(ctx, db, fDiff, fChange); err != nil {
+			os.Exit(1)
+		}
+	}
+	// fileblock 을 merge 해서 datablcok 으로 만들고 이후 파일로 저장함.
+	if err = SaveDataBlock(fb, config.RootDir); err != nil {
 		os.Exit(1)
 	}
 

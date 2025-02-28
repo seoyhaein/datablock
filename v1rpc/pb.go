@@ -101,6 +101,22 @@ func MergeFileBlocks(inputFiles []string, outputFile string) error {
 	return nil
 }
 
+// MergeFileBlocksFromData 여러 *pb.FileBlockData 를 하나의 DataBlockData 으로 통합
+// 입력 파라미터가 이미 로드된 FileBlockData 들의 슬라이스이므로, 별도의 파일 로딩 과정 없이 합친 결과를 반환함
+func MergeFileBlocksFromData(inputBlocks []*pb.FileBlockData) (*pb.DataBlockData, error) {
+	if len(inputBlocks) == 0 {
+		return nil, fmt.Errorf("no input file blocks provided")
+	}
+
+	dataBlockData := &pb.DataBlockData{
+		Blocks: inputBlocks,
+	}
+
+	// 합쳐진 결과를 반환 (필요하다면 로그 메시지 추가)
+	fmt.Printf("Successfully merged %d FileBlockData into one DataBlockData\n", len(inputBlocks))
+	return dataBlockData, nil
+}
+
 // SaveDataBlockToTextFile DataBlockData 텍스트 포맷으로 파일에 저장
 func SaveDataBlockToTextFile(filePath string, data *pb.DataBlockData) error {
 	// proto 메시지를 텍스트 포맷으로 변환
