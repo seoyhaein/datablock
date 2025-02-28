@@ -123,7 +123,7 @@ func FirstCheck(ctx context.Context, db *sql.DB, folderPath string) error {
 	}
 
 	// 6. 폴더의 total_size 및 file_count 업데이트 (Context-aware)
-	err = executeSQLWithTx(ctx, tx, "queries/update_folders.sql", folderID)
+	err = executeSQLWithTx(ctx, tx, "queries/update_folders_fromDB.sql", folderID)
 	if err != nil {
 		tx.Rollback()
 		return fmt.Errorf("폴더 통계 업데이트 실패: %w", err)
@@ -1631,7 +1631,7 @@ func FirstCheck_Old(ctx context.Context, db *sql.DB, folderPath string) error {
 		}
 	}
 
-	err = executeSQLWithTxEmbed(ctx, tx, "update_folders.sql", folderID)
+	err = executeSQLWithTxEmbed(ctx, tx, "update_folders_fromDB.sql", folderID)
 	if err != nil {
 		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
 			log.Printf("rollback failed: %v", rbErr)
@@ -1790,6 +1790,47 @@ func CompareFolders_Old(db *sql.DB, rootPath string, foldersExclusions, filesExc
 	}
 	unchanged := len(diffs) == 0
 	return unchanged, diskFolders, diffs, nil
+}
+
+// CompareFoldersAndFiles_old TODO 이거 생각할 거 많음. 같지 않을때 어떻게 처리할지 생각해야함. 같지 않을때는 db 를 업데이트 해야 할 거 같음. context 생각해보기.
+func (f *dBApisImpl) CompareFoldersAndFiles_old(ctx context.Context, db *sql.DB) (*bool, error) {
+	// 폴더 비교: foldersMatch, folders, <unused>, err
+	foldersMatch, folders, _, err := d.CompareFolders(db, f.rootDir, f.foldersExclusion, f.filesExclusions)
+	if err != nil {
+		return nil, err
+	}
+	if !foldersMatch {
+		return u.PFalse, nil
+	}
+
+	// 각 폴더별 처리
+	for _, folder := range folders {
+		// 먼저, 해당 폴더 내 파일들을 비교
+		filesMatch, files, _, err := d.CompareFiles(db, folder.Path, f.filesExclusions)
+		if err != nil {
+			return nil, err
+		}
+		if !filesMatch {
+			return u.PFalse, nil
+		}
+
+		// 파일과 폴더가 동일한 경우, 특수 파일 존재 여부를 확인
+		special, err := SpecialFilesExist(folder.Path)
+		if err != nil {
+			return nil, err
+		}
+		// 특수 파일이 이미 존재하면 새로 생성할 필요가 없으므로 건너뜀
+		if special != nil && *special {
+			continue
+		}
+
+		// 특수 파일이 없으면, 파일 목록을 추출하고 GenerateFileBlock 실행
+		fileNames := d.ExtractFileNames(files)
+		if _, err := r.GenerateFileBlock(folder.Path, fileNames); err != nil {
+			return nil, err
+		}
+	}
+	return u.PTrue, nil
 }
 
 ```

@@ -391,7 +391,7 @@ func StoreFilesFolderInfo(ctx context.Context, db *sql.DB, folderPath string, ex
 		}
 	}
 
-	err = execSQLTx(ctx, tx, "update_folders.sql", folderID)
+	err = execSQLTx(ctx, tx, "update_folders_fromDB.sql", folderID)
 	if err != nil {
 		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
 			log.Printf("rollback failed: %v", rbErr)
@@ -829,19 +829,45 @@ func CompareFiles(db *sql.DB, folderPath string, filesExclusions []string) (bool
 	return unchanged, diskFiles, changes, nil
 }
 
-// ApplyFileChangeToDB TODO 이름 너무 김.
-func ApplyFileChangeToDB(ctx context.Context, db *sql.DB, fc FileChange) error {
+// UpsertFolder FolderDiff 정보를 기반으로 DB의 폴더 정보를 업데이트하거나, 없으면 삽입합니다.
+func (fd *FolderDiff) UpsertFolder(ctx context.Context, db *sql.DB) error {
+	if fd.FolderID == 0 {
+		// DB에 해당 폴더 정보가 없는 경우: 새 레코드 삽입 (FolderID는 추후 별도 조회로 반영 가능)
+		if err := execSQL(ctx, db, "insert_folder.sql", fd.Path, fd.DiskTotalSize, fd.DiskFileCount); err != nil {
+			return fmt.Errorf("failed to insert folder for path %s: %w", fd.Path, err)
+		}
+	} else {
+		// DB에 해당 폴더 정보가 있는 경우: 업데이트
+		if err := execSQL(ctx, db, "update_folder.sql", fd.DiskTotalSize, fd.DiskFileCount, fd.FolderID); err != nil {
+			return fmt.Errorf("failed to update folder id %d, path %s: %w", fd.FolderID, fd.Path, err)
+		}
+	}
+	return nil
+}
+
+// UpsertFolders FolderDiff 슬라이스에 대해 DB 업데이트(업서트)를 수행.
+func UpsertFolders(ctx context.Context, db *sql.DB, diffs []FolderDiff) error {
+	for _, diff := range diffs {
+		if err := diff.UpsertFolder(ctx, db); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// UpsertDelFile FileChange 정보를 기반으로 DB의 파일 정보를 업데이트하거나, 없으면 삽입 또는 삭제.
+func (fc *FileChange) UpsertDelFile(ctx context.Context, db *sql.DB) error {
 	switch fc.ChangeType {
 	case "added":
 		if err := execSQL(ctx, db, "insert_file.sql", fc.FolderID, fc.Name, fc.DiskSize); err != nil {
 			return fmt.Errorf("failed to insert file %s: %w", fc.Name, err)
 		}
 	case "modified":
-		if err := execSQL(ctx, db, "update_file.sql", fc.DiskSize, fc.FileID); err != nil {
+		if err := execSQL(ctx, db, "update_files.sql", fc.DiskSize, fc.FileID); err != nil {
 			return fmt.Errorf("failed to update file %s: %w", fc.Name, err)
 		}
 	case "removed":
-		if err := execSQL(ctx, db, "delete_file.sql", fc.FileID); err != nil {
+		if err := execSQL(ctx, db, "delete_files.sql", fc.FileID); err != nil {
 			return fmt.Errorf("failed to delete file %s: %w", fc.Name, err)
 		}
 	default:
@@ -850,18 +876,15 @@ func ApplyFileChangeToDB(ctx context.Context, db *sql.DB, fc FileChange) error {
 	return nil
 }
 
-// ApplyFileChangesToDB TODO 이름 너무 김.
-func ApplyFileChangesToDB(ctx context.Context, db *sql.DB, changes []FileChange) error {
+// UpsertDelFiles FileChange 슬라이스에 대해 DB 업데이트(업서트)를 수행.
+func UpsertDelFiles(ctx context.Context, db *sql.DB, changes []FileChange) error {
 	for _, change := range changes {
-		if err := ApplyFileChangeToDB(ctx, db, change); err != nil {
+		if err := change.UpsertDelFile(ctx, db); err != nil {
 			return err
 		}
 	}
 	return nil
 }
-
-// TODO
-// folder 를 먼저 file 을 먼저.???
 
 // CheckForeignKeysEnabled DB 연결에서 외래 키가 활성화되었는지 확인함.
 // IMPORTANT: fk 값이 1이면 외래 키가 활성화된 상태임.
