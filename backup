@@ -1834,3 +1834,59 @@ func (f *dBApisImpl) CompareFoldersAndFiles_old(ctx context.Context, db *sql.DB)
 }
 
 ```
+
+.golangci.yml
+```yaml
+run:
+  timeout: 2m                # 실행 시간 제한 (2분)
+  issues-exit-code: 1         # 린트 오류 발생 시 CI에서 실패 처리
+
+linters:
+  enable:
+    - govet                  # Go 기본 정적 분석 도구
+    - revive                 # golint 대신 사용하는 코드 스타일 검사기
+    - staticcheck            # 심층적인 코드 분석 및 최적화 검사
+    - ineffassign            # 할당 후 사용되지 않는 값 감지
+    - errcheck               # 오류 반환 값을 무시하는 경우 감지
+    - gocyclo                # 함수의 순환 복잡도 분석 (복잡도 15 이상 경고)
+    - deadcode               # 사용되지 않는 코드 감지
+    - structcheck            # 사용되지 않는 구조체 필드 감지
+    - varcheck               # 사용되지 않는 변수 감지
+    - unused                 # 사용되지 않는 코드 감지
+  disable:
+    - scopelint              # Go 1.14 이후 불필요한 검사 비활성화
+
+issues:
+  exclude-rules:
+    - path: ".*_test.go"      # 테스트 코드에서는 린트 오류 무시
+      linters:
+        - revive
+        - govet
+    - linters:
+        - errcheck          # "error return value not checked" 경고 무시
+      text: "error return value not checked"
+  exclude:                  # 특정 경고 메시지 무시
+    - "should have comment"         # 모든 함수에 주석 요구 경고 무시
+    - "don't use underscores in Go names"  # 언더스코어 사용 경고 무시
+
+linters-settings:
+  gocyclo:
+    min-complexity: 15      # 순환 복잡도 15 이상일 때 경고
+#  govet:
+#    check-shadowing: true   # 변수 그림자(shadowing) 감지 활성화
+  errcheck:
+    check-type-assertions: true  # 타입 변환 관련 오류 감지 활성화
+#  unused:
+#    check-exported: true    # 사용되지 않는 외부 변수 검사
+
+#cache:
+#  enabled: true             # 캐시 활성화 (속도 향상)
+
+output:
+  out-format: colored-line-number  # 색상이 있는 출력 형식
+  sort-results: true               # 정렬된 결과 표시
+
+#parallel: true              # 병렬 실행 활성화 (자동 최적화)
+
+
+```

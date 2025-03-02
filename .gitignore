@@ -22,3 +22,7 @@ vendor/
 go.work
 
 qodana.yaml
+
+# lint
+.golangci.yml
+lint_results.json
