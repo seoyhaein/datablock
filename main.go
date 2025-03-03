@@ -77,7 +77,8 @@ func main() {
 		os.Exit(1)
 	}
 	// fileblock 을 merge 해서 datablcok 으로 만들고 이후 파일로 저장함.
-	if err = SaveDataBlock(fb, config.RootDir); err != nil {
+	outputDatablock := filepath.Join(config.RootDir, "datablock.pb")
+	if err = SaveDataBlock(fb, outputDatablock); err != nil {
 		os.Exit(1)
 	}
 
