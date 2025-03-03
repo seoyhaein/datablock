@@ -93,7 +93,7 @@ func (f *dBApisImpl) CompareFoldersAndFiles(ctx context.Context, db *sql.DB) (*b
 
 			// 만약 pb 파일이 여러 개이면 삭제 후 빈 슬라이스로 초기화
 			if len(pbs) > 1 {
-				if err = DeleteFilesByPattern(folder.Path, "*.pb"); err != nil {
+				if err = DeleteFiles(pbs); err != nil {
 					return nil, nil, nil, nil, err
 				}
 				pbs = []string{}
@@ -141,6 +141,8 @@ func UpdateFilesAndFolders(ctx context.Context, db *sql.DB, diffs []d.FolderDiff
 	return nil
 }
 
+// SaveDataBlock fileblock 을 병합하여 datablcok 으로 저장
+// outputFile 은 파일이어야 함. 파일이 존재할 경우는 체크 하지 않고 덮어씀. TODO 이거 생각해봐야 함.
 func SaveDataBlock(inputBlocks []*protos.FileBlockData, outputFile string) error {
 	dataBlock, err := v1rpc.MergeFileBlocksFromData(inputBlocks)
 	if err != nil {
@@ -156,30 +158,6 @@ func SaveDataBlock(inputBlocks []*protos.FileBlockData, outputFile string) error
 	return nil
 }
 
-// FileExists 주어진 폴더 내에서 fileOrPattern 에 해당하는 파일이 존재하는지 확인
-// usePattern 이 false 이면 정확한 파일명으로 확인하고, true 이면 fileOrPattern 을 glob 패턴으로 사용함
-/*func FileExists(folder, fileOrPattern string, usePattern bool) (bool, error) {
-	if !usePattern {
-		// 정확한 파일명으로 존재 여부 체크
-		path := filepath.Join(folder, fileOrPattern)
-		if _, err := os.Stat(path); err == nil {
-			return true, nil
-		} else if os.IsNotExist(err) {
-			return false, nil
-		} else {
-			return false, fmt.Errorf("파일 체크 실패 (%s): %w", path, err)
-		}
-	} else {
-		// 패턴 검색: glob 사용
-		fullPattern := filepath.Join(folder, fileOrPattern)
-		matches, err := filepath.Glob(fullPattern)
-		if err != nil {
-			return false, fmt.Errorf("패턴 검색 실패 (%s): %w", fileOrPattern, err)
-		}
-		return len(matches) > 0, nil
-	}
-}*/
-
 // FileExistsExact 주어진 폴더 내에서 정확한 파일명이 존재하는지 확인. 별도로 FileExists 가 있지만 그냥 이걸 씀.
 func FileExistsExact(folder, fileName string) (bool, error) {
 	path := filepath.Join(folder, fileName)
@@ -192,7 +170,7 @@ func FileExistsExact(folder, fileName string) (bool, error) {
 	}
 }
 
-// SearchFilesByPattern는 주어진 폴더 내에서 지정한 glob 패턴에 매칭되는 파일들을 검색합니다.
+// SearchFilesByPattern 주어진 폴더 내에서 지정한 glob 패턴에 매칭되는 파일들을 검색
 // 검색 결과로 매칭된 파일 경로들의 배열을 반환합니다.
 func SearchFilesByPattern(folder, pattern string) ([]string, error) {
 	fullPattern := filepath.Join(folder, pattern)
@@ -203,7 +181,7 @@ func SearchFilesByPattern(folder, pattern string) ([]string, error) {
 	return matches, nil
 }
 
-// DeleteFilesByPattern는 주어진 폴더 내에서 지정한 glob 패턴에 매칭되는 파일들을 검색합니다.
+// DeleteFilesByPattern 주어진 폴더 내에서 지정한 glob 패턴에 매칭되는 파일들을 검색해서 삭제함
 // 만약 매칭된 파일이 2개 이상이면, 해당 파일들을 모두 삭제합니다.
 func DeleteFilesByPattern(folder, pattern string) error {
 	files, err := SearchFilesByPattern(folder, pattern)
@@ -216,6 +194,18 @@ func DeleteFilesByPattern(folder, pattern string) error {
 		for _, filePath := range files {
 			if err := os.Remove(filePath); err != nil {
 				return fmt.Errorf("파일 삭제 실패 (%s): %w", filePath, err)
+			}
+		}
+	}
+	return nil
+}
+
+// DeleteFiles 전달받은 파일 경로 목록에서 2개 이상의 파일이 존재하면 모두 삭제
+func DeleteFiles(files []string) error {
+	if len(files) > 1 {
+		for _, filePath := range files {
+			if err := os.Remove(filePath); err != nil {
+				return fmt.Errorf("failed to delete file (%s): %w", filePath, err)
 			}
 		}
 	}

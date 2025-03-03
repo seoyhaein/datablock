@@ -1995,4 +1995,26 @@ func (f *dBApisImpl) CompareFoldersAndFiles(ctx context.Context, db *sql.DB) (*b
 	return u.PFalse, folderDiffs, allFileChanges, fbs, nil
 }
 
+func FileExists(folder, fileOrPattern string, usePattern bool) (bool, error) {
+	if !usePattern {
+		// 정확한 파일명으로 존재 여부 체크
+		path := filepath.Join(folder, fileOrPattern)
+		if _, err := os.Stat(path); err == nil {
+			return true, nil
+		} else if os.IsNotExist(err) {
+			return false, nil
+		} else {
+			return false, fmt.Errorf("파일 체크 실패 (%s): %w", path, err)
+		}
+	} else {
+		// 패턴 검색: glob 사용
+		fullPattern := filepath.Join(folder, fileOrPattern)
+		matches, err := filepath.Glob(fullPattern)
+		if err != nil {
+			return false, fmt.Errorf("패턴 검색 실패 (%s): %w", fileOrPattern, err)
+		}
+		return len(matches) > 0, nil
+	}
+}
+
 ```
